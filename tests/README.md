@@ -1,53 +1,47 @@
-# Fixture self-validation and lane RED tests
-
-Run everything:
+# Running the test suite
 
 ```
-pytest tests/ -q
+PYTHONPATH=. uv run --with pytest --with fastapi --with httpx \
+  --with 'ruamel.yaml' --with pyyaml --with python-multipart \
+  --with psutil --with python-dotenv pytest -q tests/
 ```
 
-## Contract card (this card)
+This dependency-isolated command is the acceptance path used by maintainers;
+it also makes `fastapi` and Hermes' YAML support available to subprocess tests.
+See `docs/INSTALL.md` for profile-safe plugin validation. The suite is expected
+to finish with no failures or errors (platform-specific tests may skip when
+their external host surface is unavailable).
 
-```
-pytest tests/test_contract_fixtures.py -q
-```
+## Lane map
 
-Expected: PASS. This is the self-validating fixture/model layer this card
-owns -- no production parser/scanner/network/UI code is implemented here.
+Every parser/scanner/Scryfall/adapter/service/UI lane is implemented; each
+test file below is that lane's executable contract, not a placeholder:
 
-## Promoted implementation lanes
-
-Each lane module now exists as a minimal importable skeleton (a sentinel
-function/constant with no real parser/scanner/network/adapter/UI behavior).
-Each lane's RED test therefore imports successfully and fails at its named
-assertion -- not at import, collection, or `NotImplementedError`.
-
-- Parser/validator lane (`t_09bc9ceb`):
-  `pytest tests/test_parser_lane_contract.py -q`
-  fails at `assert total == 100` (`deck_lab.parser.parse_board` returns no
-  cards yet).
-- Scanner lane (`t_eb91eeab`):
-  `pytest tests/test_scanner_lane_contract.py -q`
-  fails at `assert any(...)` (`deck_lab.scanner.scan_repository` returns no
-  deck summaries yet).
-- Scryfall resolver lane (`t_5d228091`):
-  `pytest tests/test_scryfall_lane_contract.py -q`
-  fails at `assert all(len(batch) <= 75 ...)` (`deck_lab.scryfall.resolve_collection`
-  does not batch identifiers yet).
-- ManaBox/Arena adapter lane (`t_21314a59`):
-  `pytest tests/test_adapter_lane_contract.py -q`
-  fails at `assert len(commander_rows) == 1` (`deck_lab.adapters.manabox_arena.import_text`
-  does not parse zone headers yet).
-- Moxfield bulk adapter lane (`t_e5e51273`):
-  `pytest tests/test_moxfield_lane_contract.py -q`
-  fails looking up the card by name (`deck_lab.adapters.moxfield_bulk.import_text`
-  does not strip provider-only finish markers yet, so the row name still
-  carries `*F*` and the lookup by bare name finds nothing).
-- Desktop pane lane (`t_e9b37fbc`):
-  `pytest tests/test_ui_lane_contract.py -q`
-  fails at `assert PANE_COLUMN_COUNT == 2` (`deck_lab.ui.pane_contract`
-  declares a deliberately wrong sentinel value of `1`).
-
-Once a lane implements real behavior, its RED test must keep failing on the
-assertion inside the test body (e.g. wrong parsed count, wrong error code)
-until the lane's own implementation makes it pass for real.
+- `tests/test_contract_fixtures.py` — fixture/model self-validation
+  (`deck_lab/models.py`, locked schema identifiers).
+- `tests/test_parser_lane_contract.py`,
+  `tests/test_parser_strict_contract_coverage.py` — board/README Markdown
+  parser and validator (`deck_lab/parser.py`); one malformed fixture per
+  error code under `tests/fixtures/malformed/`.
+- `tests/test_scanner_lane_contract.py`, `tests/test_scanner_behavior.py`,
+  `tests/test_scanner_corrections.py` — repository scan and revision
+  (`deck_lab/scanner.py`).
+- `tests/test_scryfall_lane_contract.py`, `tests/test_scryfall_resolver.py`
+  — batched Scryfall resolution and on-disk cache (`deck_lab/scryfall.py`).
+- `tests/test_adapter_lane_contract.py`, `tests/test_manabox_arena_adapter.py`
+  — ManaBox/Arena plain-text import/export
+  (`deck_lab/adapters/manabox_arena.py`).
+- `tests/test_moxfield_lane_contract.py`, `tests/test_moxfield_bulk_adapter.py`
+  — Moxfield-bulk import/export (`deck_lab/adapters/moxfield_bulk.py`).
+- `tests/test_service_lane_contract.py`, `tests/test_service_behavior.py`,
+  `tests/test_service_defect_corrections.py` — the shared orchestration
+  boundary (`deck_lab/service.py`): path safety, list/get/validate/
+  import/export, atomic writes, hash preconditions.
+- `tests/test_ui_lane_contract.py` — desktop pane contract sentinel
+  (`deck_lab/ui/pane_contract.py`).
+- `tests/test_plugin_api_lane_contract.py` — FastAPI route wrappers
+  (`dashboard/plugin_api.py`), including the standalone-file-import
+  constraint the real dashboard loader relies on.
+- `tests/test_ui_live_wiring.py` — desktop pane (`desktop/plugin.js`) live
+  `/revision`-poll wiring, cache invalidation, and loading/error/empty
+  states.
