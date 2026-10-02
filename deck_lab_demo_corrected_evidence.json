@@ -1,0 +1,119 @@
+{
+  "card": "t_89c70ca5",
+  "code_commit_used_for_capture": "dd76eac4abf06d48f9e649dddcb7be5d58000d30",
+  "code_commit_pushed": true,
+  "push_output": "4aa140f..dd76eac  builder/deck-lab-pane -> builder/deck-lab-pane",
+  "evidence_commit_is_manifest_only": "this commit updates only this JSON file; no executable/UI changes occur after recording capture",
+
+  "1_mutation_hook_removed": {
+    "requirement": "the prior card's temporary DECK_LAB_MUTATION_STALE_ART localStorage-gated mutation branch in ImageWithLoadingGuard was never restored at a86e901/4aa140f; this card removes it entirely",
+    "removed_from_desktop_plugin_js": "__deckLabMutationStaleArtActive__ helper and the mutationActive conditional in ImageWithLoadingGuard; effectiveLoadedSrc is gone -- the component now always uses loadedSrc directly, resets it on every src change, and onLoad unconditionally calls setLoadedSrc(src)",
+    "removed_from_check_deck_lab_interactions_mjs": "USE_STALE_ART_MUTATION env flag and the localStorage.setItem/removeItem('DECK_LAB_MUTATION_STALE_ART', ...) branch before the cold reload",
+    "removed_from_record_deck_lab_demo_mjs": "the localStorage.removeItem('DECK_LAB_MUTATION_STALE_ART') cleanup call before the cold reload",
+    "note": "the RED output documented in the prior card's manifest (a86e901/4aa140f) was produced against the now-deleted temporary mutation branch. The final PR source at dd76eac has NO runnable mutation switch for stale-art; it is the single restored production path, proven GREEN below.",
+    "code_commit": "dd76eac4abf06d48f9e649dddcb7be5d58000d30",
+    "node_check": "node --check desktop/plugin.js && node --check scripts/check_deck_lab_interactions.mjs && node --check scripts/record_deck_lab_demo.mjs -> exit 0 (SYNTAX_OK)"
+  },
+
+  "2_blast_radius_control_old_key_now_inert": {
+    "procedure": "set the OLD localStorage key DECK_LAB_MUTATION_STALE_ART='1' directly via CDP against the final production plugin.js, cold-reload, select the Nelly Borca deck, then hover Sol Ring -> Joined Researchers and assert the guard still works",
+    "key_was_set": "localStorage.getItem('DECK_LAB_MUTATION_STALE_ART') === '1' confirmed after reload (key present, proving this is a real test of dead code, not an untested no-op)",
+    "result": {
+      "solRingSrc": "https://cards.scryfall.io/normal/front/8/e/8ee443cc-e17a-493b-9c93-1f9e141a30e4.jpg?1789644446",
+      "afterSwitch": { "src": "https://cards.scryfall.io/normal/front/1/e/1ebaafe0-3a9a-424c-8698-d26e7be45343.jpg?1783903702", "hidden": true, "loadedSrc": "" },
+      "guard_still_works_key_ignored": true
+    },
+    "cleanup": "localStorage.removeItem('DECK_LAB_MUTATION_STALE_ART') + reload; confirmed localStorage.getItem(...) === null afterward"
+  },
+
+  "3_trusted_row_mutation_still_red": {
+    "command": "DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK=1 node scripts/check_deck_lab_interactions.mjs",
+    "exit_code": 1,
+    "failures_count": 1,
+    "failing_check": "trusted_row_input_pins_via_card_row_onclick",
+    "detail": { "rowClickCaptureAfterFirst": { "isTrusted": false, "closestGroup": "Sol Ring" }, "pinnedAfterRowBackgroundClick": true },
+    "note": "this mutation (DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK) is unrelated to the removed stale-art mutation and remains in the harness as required by the card -- unchanged, still correctly RED"
+  },
+
+  "4_live_harness_green_named_check_count": {
+    "command": "node scripts/check_deck_lab_interactions.mjs",
+    "exit_code": 0,
+    "failures_field": 0,
+    "programmatically_counted_results": "grep count of '\"pass\": true' across the full results object == 19 of 19 named checks passing (re-run twice, both times rc=0, failures:0, 19/19)"
+  },
+
+  "5_pytest_wrapper_live": {
+    "command": "DECK_LAB_LIVE_CDP=1 /private/tmp/mtgvenv/bin/pytest -q tests/test_ui_interactions.py",
+    "output": "1 passed in 140.55s (0:02:20)",
+    "exit_code": 0
+  },
+
+  "6_recorder": {
+    "command": "node scripts/record_deck_lab_demo.mjs /Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_final2.mp4",
+    "run_against_code_sha": "dd76eac4abf06d48f9e649dddcb7be5d58000d30 (clean, pushed)",
+    "exit_code": 0,
+    "self_reported_by_script": { "totalFrames": 41, "captureWallMs": 20089, "fps": 2.041, "bytes": 995452 },
+    "ffprobe_independent_verification": {
+      "command": "ffprobe -v error -select_streams v:0 -show_entries stream=width,height,nb_frames -show_entries format=duration <path>",
+      "duration_seconds": 20.088192,
+      "width": 2440,
+      "height": 1600,
+      "nb_frames": 41,
+      "bytes": 995452
+    },
+    "mtime": "2026-10-02 01:26:46 (-04:00), after code commit dd76eac at 2026-10-02T01:23:26-04:00",
+    "mp4_location": "/Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_final2.mp4 (left in builder scratch per card instructions, not committed)",
+    "defect_2_frame_verification": {
+      "method": "extracted a frame ~0.6s before end of file via ffmpeg -sseof, inspected visually",
+      "observed": "beat 9 label 'invalid candidate diagnostics (exact heading/code/message/path held, wrapped not clipped)' visible; the preview/decklist pane shows the complete diagnostic wrapped across 3 lines: 'This deck is invalid.' / 'CARD_QUANTITY_INVALID: Quantity must be a positive integer (tests/fixtures/malformed/card_quantity_invalid_zero.md)' -- the full path is visible, not clipped or truncated with an ellipsis"
+    },
+    "recorder_assertion_change": "the recorder now selects the actual rendered element via document.querySelector('[data-testid=\"invalid-diagnostic\"]'), asserts its exact textContent equals 'CARD_QUANTITY_INVALID: Quantity must be a positive integer (tests/fixtures/malformed/card_quantity_invalid_zero.md)', and asserts el.scrollWidth <= el.clientWidth + 1 (no horizontal overflow/clipping) plus the element's right edge stays within its parent column's right edge -- not merely a document.body.innerText substring check",
+    "cleanup_semantics_unchanged": "removes any existing file at outPath at start; on any assertSuccess failure or thrown error, removes the partial output file and always removes the frame dir in a finally block; CDP websocket is closed in the same finally block regardless of success/failure (verified unchanged in diff vs 4aa140f)"
+  },
+
+  "7_focused_and_broader_tests": {
+    "full_suite": {
+      "command": "/private/tmp/mtgvenv/bin/pytest -q tests/",
+      "output": "3 failed, 97 passed, 1 skipped in 0.80s",
+      "failing_tests": [
+        "tests/test_adapter_lane_contract.py::test_import_text_preserves_zone_quantity_and_name_round_trip",
+        "tests/test_parser_lane_contract.py::test_parse_board_derives_100_cards_from_nelly_golden_fixture",
+        "tests/test_scanner_lane_contract.py::test_scan_repository_discovers_nelly_deck_as_valid"
+      ],
+      "pre_existing_and_unrelated": "identical to the baseline recorded at a86e901/4aa140f (3 failed/97 passed/1 skipped), unrelated adapter/parser/scanner lane, untouched by this card"
+    }
+  },
+
+  "8_plugin_validation": {
+    "check_plugin_js": {
+      "command": "python3 .../no-build-plugin-ui-edits/scripts/check_plugin_js.py ~/.hermes/desktop-plugins/deck-lab/plugin.js",
+      "output": "loader import regex: no bare specifiers (ok); node --check (ok); executes + register(): OK id=deck-lab"
+    },
+    "hermes_plugins_validate": {
+      "command": "hermes plugins validate . --json",
+      "output": "ok: true; security scan: safe; desktop surface: stays inside the plugin SDK surface; built-in tool collisions: no tools to check"
+    }
+  },
+
+  "9_synthetic_merge_with_origin_main": {
+    "command": "fresh clone, git checkout dd76eac, git fetch origin main, git merge --no-commit --no-ff origin/main",
+    "merge_result": "Automatic merge went well; stopped before committing as requested (clean, no conflicts)",
+    "post_merge_pytest": {
+      "command": "/private/tmp/mtgvenv/bin/pytest -q tests/",
+      "output": "266 passed, 1 skipped in 7.44s"
+    }
+  },
+
+  "10_pr_state": {
+    "command": "gh pr view 7 --json state,headRefOid; gh pr list --head builder/deck-lab-pane --json number,state; gh pr checks 7",
+    "output": "PR #7 OPEN, headRefOid=dd76eac4abf06d48f9e649dddcb7be5d58000d30, sole open PR for builder/deck-lab-pane; GitGuardian Security Checks: pass"
+  },
+
+  "11_clean_untracked_audit": {
+    "code_commit_git_status_before_commit": "M desktop/plugin.js, M scripts/check_deck_lab_interactions.mjs, M scripts/record_deck_lab_demo.mjs -- no untracked files",
+    "intended_file_diff_matches_card_scope": "desktop/plugin.js (mutation removal + break-all diagnostic wrap), scripts/check_deck_lab_interactions.mjs (mutation env/localStorage plumbing removed), scripts/record_deck_lab_demo.mjs (mutation cleanup removed + exact-element diagnostic assertion) -- exactly the files the card's Defect 1/2 sections name"
+  },
+
+  "code_commit": "dd76eac4abf06d48f9e649dddcb7be5d58000d30 on builder/deck-lab-pane, pushed to origin (4aa140f..dd76eac)",
+  "worker_session_id": "t_89c70ca5"
+}
