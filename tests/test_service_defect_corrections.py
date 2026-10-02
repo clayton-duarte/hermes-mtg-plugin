@@ -6,6 +6,7 @@ correspond to.
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -290,53 +291,107 @@ def test_stale_cache_entry_is_served_and_revalidated_via_service(tmp_path):
     key = _scryfall.identifier_key(identifier)
     service._cache.put(key, {"name": "Sol Ring", "oracle_id": "o1"}, now=0.0)
 
-    def responder(identifiers):
-        return _FakeResponse(data=[{"name": "Sol Ring", "oracle_id": "o2", "id": "xyz"}], not_found=[])
+    http_client = _FakeHttpClient(
+        lambda identifiers: _FakeResponse(
+            data=[{"name": "Sol Ring", "oracle_id": "o2", "id": "xyz"}], not_found=[]
+        )
+    )
 
     import time as _time
 
     real_time = _time.time
     try:
         _time.time = lambda: 1_000_000.0  # force staleness
-        service.http_client = _FakeHttpClient(responder)
+        service.http_client = http_client
         result = service.get_deck("decks/commander/simple", resolve_remote=True)
     finally:
         _time.time = real_time
 
-    # Stale entry still served (not unresolved)...
-    assert result["cards"][0]["scryfall"] is not None
+    # The stale entry triggered an actual revalidation call...
+    assert len(http_client.calls) == 1
+    # ...and the returned/cached projection carries the refreshed value,
+    # not merely the stale one.
+    assert result["cards"][0]["scryfall"]["oracle_id"] == "o2"
     assert result["remote_unresolved_count"] == 0
+    cached_entry = service._cache.get(key)
+    assert cached_entry["data"]["oracle_id"] == "o2"
 
 
 # ---------------------------------------------------------------------
-# Round-trip strengthening: zone/quantity/canonical name/set/collector
+# Round-trip strengthening: semantic zone/quantity/canonical
+# name/set/collector equality across export -> import for every
+# supported text dialect. Category is intentionally excluded -- these
+# text dialects cannot represent it.
 # ---------------------------------------------------------------------
 
+STRICT_DECK_README = (
+    "---\nschema: hermes-mtg/deck/v1\nname: Strict\nformat: commander\n"
+    "color_identity: [R]\nstatus: built\n---\n"
+)
+STRICT_MAINBOARD = (
+    "---\nschema: hermes-mtg/board/v1\nname: Mainboard\nkind: mainboard\norder: 10\n"
+    "---\n\n"
+    "## Commander\n\n### Commander\n\n```decklist\n1 Nelly Borca, Impulsive Accuser (CLB) 21\n```\n\n"
+    "## Deck\n\n### Lands\n\n```decklist\n1 Sol Ring (CMR) 123\n2 Mountain (M21) 275\n```\n"
+)
+STRICT_SIDEBOARD = (
+    "---\nschema: hermes-mtg/board/v1\nname: Sideboard\nkind: sideboard\norder: 20\n"
+    "---\n\n## Sideboard\n\n### Uncategorized\n\n```decklist\n1 Negate (WAR) 60\n```\n"
+)
 
-def test_manabox_round_trip_preserves_zone_quantity_name_set_collector(tmp_path):
-    workspace = _simple_workspace(tmp_path)
+
+def _strict_workspace(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "strict"
+    _write(deck_dir / "README.md", STRICT_DECK_README)
+    _write(deck_dir / "mainboard.md", STRICT_MAINBOARD)
+    _write(deck_dir / "sideboard.md", STRICT_SIDEBOARD)
+    return tmp_path
+
+
+def _semantic_key(card):
+    return (card.zone, card.quantity, card.name, card.set_code, card.collector_number)
+
+
+def _parse_all_targets(dialect, targets):
+    """Re-parse every rendered target the import produced, through the
+    right lane for each dialect, into (zone, qty, name, set, collector)
+    tuples -- never re-deriving parsing logic here."""
+
+    from deck_lab import parser as _parser
+
+    cards = []
+    for target in targets:
+        parse_result = _parser.parse_board(target["rendered"], path=target["path"])
+        cards.extend(parse_result.cards)
+    return cards
+
+
+@pytest.mark.parametrize("dialect", ["manabox", "arena", "moxfield-bulk"])
+def test_export_import_round_trips_exact_semantic_card_identity(tmp_path, dialect):
+    workspace = _strict_workspace(tmp_path)
     service = DeckLabService(workspace)
 
-    exported = service.export_deck("decks/commander/simple", dialect="manabox")
+    from deck_lab import parser as _parser
+
+    source_cards = []
+    for board_path in (
+        "decks/commander/strict/mainboard.md",
+        "decks/commander/strict/sideboard.md",
+    ):
+        board_abs = workspace / board_path
+        source_cards.extend(_parser.parse_board(board_abs.read_text(), path=board_path).cards)
+
+    source_signature = Counter(_semantic_key(c) for c in source_cards)
+
+    exported = service.export_deck("decks/commander/strict", dialect=dialect)
     reimport = service.import_deck(
-        dialect="manabox",
+        dialect=dialect,
         target_deck_path="decks/commander/reimported",
         text=exported["text"],
     )
-    [target] = reimport["targets"]
-    assert target["valid"] is True
-    assert "## Commander" in target["rendered"]
-    assert "1 Sol Ring" in target["rendered"]
+    assert all(t["valid"] for t in reimport["targets"])
 
+    reimported_cards = _parse_all_targets(dialect, reimport["targets"])
+    reimported_signature = Counter(_semantic_key(c) for c in reimported_cards)
 
-def test_moxfield_round_trip_preserves_set_and_collector_number(tmp_path):
-    workspace = _simple_workspace(tmp_path)
-    service = DeckLabService(workspace)
-    result = service.import_deck(
-        dialect="moxfield-bulk",
-        target_deck_path="decks/commander/mox-printing",
-        text="1 Sol Ring (CMR) 123\n",
-    )
-    [target] = result["targets"]
-    assert "(CMR) 123" in target["rendered"]
-    assert target["valid"] is True
+    assert reimported_signature == source_signature

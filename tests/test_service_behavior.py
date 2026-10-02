@@ -265,10 +265,6 @@ def test_manabox_import_dry_run_renders_target_with_hash(tmp_path):
     assert "schema: hermes-mtg/board/v1" in target["rendered"]
 
 
-def test_arena_import_dry_run_parses_sideboard():
-    pass  # covered via manabox/arena shared adapter test below
-
-
 def test_moxfield_bulk_import_dry_run_renders_categories(tmp_path):
     workspace = _simple_workspace(tmp_path)
     service = DeckLabService(workspace)
