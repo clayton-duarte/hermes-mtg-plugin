@@ -94,11 +94,16 @@ def test_validate_route_reports_valid(client):
     assert resp.json()["valid"] is True
 
 
-def test_cache_status_route_reports_unconfigured(client):
+def test_cache_status_route_reports_configured(client, tmp_path, monkeypatch):
+    # The runtime shared-factory fix (card t_678aa3e7) wires a persistent
+    # cache under HERMES_HOME for every production route call, so
+    # cache_status now reports configured:true (not the pre-fix
+    # unconfigured/offline default).
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-home"))
     resp = client.get("/scryfall/cache-status")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["configured"] is False
+    assert body["configured"] is True
 
 
 def test_export_route_renders_manabox_text():

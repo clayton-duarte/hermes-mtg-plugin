@@ -44,16 +44,26 @@ def _bounded(data: dict) -> str:
     )
 
 
+def build_service(workspace_root):
+    """Module-level indirection so tests can monkeypatch
+    `deck_lab.tools.build_service` directly, while keeping the real
+    `deck_lab.runtime` import (and its httpx dependency) lazy until a tool
+    actually executes -- the bare admission probe never needs it."""
+
+    from deck_lab.runtime import build_service as _build_service
+
+    return _build_service(workspace_root)
+
+
 def _service_for(args: dict):
     # Keep plugin discovery/registration dependency-light. Hermes installs the
     # declared runtime dependencies before enabling the plugin, but its
     # isolated admission probe intentionally imports the entrypoint in a bare
-    # interpreter. The service (and PyYAML) is only needed when a tool actually
-    # executes, not while the five schemas are registered.
-    from deck_lab.service import DeckLabService
-
+    # interpreter. The runtime factory (and its httpx dependency) is only
+    # needed when a tool actually executes, not while the five schemas are
+    # registered.
     workspace_root = args.get("workspace_root") or os.getcwd()
-    return DeckLabService(workspace_root)
+    return build_service(workspace_root)
 
 
 def _run(args: dict, call: Callable[[Any], dict]) -> str:
