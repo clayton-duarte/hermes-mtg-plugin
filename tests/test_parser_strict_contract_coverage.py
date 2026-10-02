@@ -2,10 +2,11 @@
 
 These tests invoke `parse_board`/`parse_deck_readme` directly on every
 malformed fixture and assert the exact stable error code, path, and line,
-plus additional cases the architect correction called out explicitly:
-valid optional YAML, required field type/value rules, punctuation/parens in
-card names, DFCs, annotations/links, missing categories, prose, H1 count,
-pre-zone rows, whitespace, uppercase set codes, and fence balance.
+plus the architect-correction cases: open-vocabulary status, empty
+color_identity, non-string color members, malformed/non-mapping YAML,
+category-required fences, exact fence syntax, blank lines inside fences,
+forbidden provider syntax inside fences, punctuation/DFC card names, long
+set codes, optional metadata types, and prohibited derived keys.
 """
 
 from __future__ import annotations
@@ -48,7 +49,25 @@ def test_board_frontmatter_invalid_missing_order_fixture():
     err = _only_error(result)
     assert err.code == "BOARD_FRONTMATTER_INVALID"
     assert err.path == str(path)
+    assert err.line == 5  # closing '---' line of the frontmatter block
     assert result.cards == []
+
+
+def test_board_frontmatter_invalid_yaml_fixture():
+    path = MALFORMED / "board_frontmatter_invalid_yaml.md"
+    result = parse_board(path.read_text(), path=str(path))
+    err = _only_error(result)
+    assert err.code == "BOARD_FRONTMATTER_INVALID"
+    assert err.path == str(path)
+    assert err.line is not None
+
+
+def test_board_frontmatter_non_mapping_fixture():
+    path = MALFORMED / "board_frontmatter_non_mapping.md"
+    result = parse_board(path.read_text(), path=str(path))
+    err = _only_error(result)
+    assert err.code == "BOARD_FRONTMATTER_INVALID"
+    assert err.path == str(path)
 
 
 def test_board_schema_unsupported_fixture():
@@ -101,6 +120,24 @@ def test_decklist_fence_invalid_fixture():
     assert err.line == 12  # ```text opener
 
 
+def test_decklist_fence_without_category_fixture():
+    path = MALFORMED / "decklist_fence_no_category.md"
+    result = parse_board(path.read_text(), path=str(path))
+    err = _only_error(result)
+    assert err.code == "DECKLIST_FENCE_INVALID"
+    assert err.path == str(path)
+    assert err.line == 10  # the fence opener, no preceding H3-H6 category
+
+
+def test_decklist_fence_unclosed_reports_opener_line_fixture():
+    path = MALFORMED / "decklist_fence_unclosed.md"
+    result = parse_board(path.read_text(), path=str(path))
+    codes = [e.code for e in result.errors]
+    assert "DECKLIST_FENCE_INVALID" in codes
+    err = next(e for e in result.errors if e.code == "DECKLIST_FENCE_INVALID")
+    assert err.line == 12  # the ```decklist opener, not the terminal line
+
+
 def test_card_outside_decklist_fixture():
     path = MALFORMED / "card_outside_decklist.md"
     result = parse_board(path.read_text(), path=str(path))
@@ -151,6 +188,7 @@ def test_deck_frontmatter_missing_schema_fixture():
     result = parse_deck_readme(path.read_text(), path=str(path))
     err = _only_error(result)
     assert err.code == "DECK_FRONTMATTER_MISSING"
+    assert err.path == str(path)
 
 
 def test_deck_schema_unsupported_fixture():
@@ -167,6 +205,23 @@ def test_deck_frontmatter_invalid_color_identity_fixture():
     err = _only_error(result)
     assert err.code == "DECK_FRONTMATTER_INVALID"
     assert err.line == 5  # `color_identity:` key line
+
+
+def test_deck_frontmatter_invalid_yaml_fixture():
+    path = MALFORMED / "deck_frontmatter_invalid_yaml.md"
+    result = parse_deck_readme(path.read_text(), path=str(path))
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+    assert err.path == str(path)
+    assert err.line is not None
+
+
+def test_deck_frontmatter_non_mapping_fixture():
+    path = MALFORMED / "deck_frontmatter_non_mapping.md"
+    result = parse_deck_readme(path.read_text(), path=str(path))
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+    assert err.path == str(path)
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +263,9 @@ status: built
 tags:
   - politics
   - goad
+sources:
+  - provider: moxfield
+    external_id: optional-provider-id
 ---
 
 # Nelly Borca
@@ -284,18 +342,80 @@ order: 10
     assert err.code == "BOARD_FRONTMATTER_INVALID"
 
 
-def test_deck_readme_rejects_non_lowercase_status():
+def test_deck_readme_accepts_open_vocabulary_status():
     text = """---
 schema: hermes-mtg/deck/v1
 name: Nelly Borca
 format: commander
 color_identity: [R, W]
-status: Built
+status: In Progress
 ---
 
 # Nelly Borca
 """
-    result = parse_deck_readme(text, path="bad-status.md")
+    result = parse_deck_readme(text, path="open-status.md")
+    assert result.errors == []
+
+
+def test_deck_readme_rejects_whitespace_only_status():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Nelly Borca
+format: commander
+color_identity: [R, W]
+status: "   "
+---
+
+# Nelly Borca
+"""
+    result = parse_deck_readme(text, path="blank-status.md")
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+
+
+def test_deck_readme_accepts_empty_color_identity():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Colorless Golem
+format: commander
+color_identity: []
+status: built
+---
+
+# Colorless Golem
+"""
+    result = parse_deck_readme(text, path="colorless.md")
+    assert result.errors == []
+
+
+def test_deck_readme_rejects_nested_list_color_identity_member():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Nelly Borca
+format: commander
+color_identity: [[R], W]
+status: built
+---
+
+# Nelly Borca
+"""
+    result = parse_deck_readme(text, path="nested-list-color.md")
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+
+
+def test_deck_readme_rejects_map_color_identity_member():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Nelly Borca
+format: commander
+color_identity: [{a: b}, W]
+status: built
+---
+
+# Nelly Borca
+"""
+    result = parse_deck_readme(text, path="map-color.md")
     err = _only_error(result)
     assert err.code == "DECK_FRONTMATTER_INVALID"
 
@@ -316,8 +436,60 @@ status: built
     assert err.code == "DECK_FRONTMATTER_INVALID"
 
 
+def test_deck_readme_rejects_non_list_tags():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Nelly Borca
+format: commander
+color_identity: [R, W]
+status: built
+tags: politics
+---
+
+# Nelly Borca
+"""
+    result = parse_deck_readme(text, path="bad-tags.md")
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+
+
+def test_deck_readme_rejects_non_object_sources():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Nelly Borca
+format: commander
+color_identity: [R, W]
+status: built
+sources:
+  - moxfield
+---
+
+# Nelly Borca
+"""
+    result = parse_deck_readme(text, path="bad-sources.md")
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+
+
+def test_deck_readme_rejects_prohibited_derived_key():
+    text = """---
+schema: hermes-mtg/deck/v1
+name: Nelly Borca
+format: commander
+color_identity: [R, W]
+status: built
+commander: Nelly Borca, Impulsive Accuser
+---
+
+# Nelly Borca
+"""
+    result = parse_deck_readme(text, path="prohibited-key.md")
+    err = _only_error(result)
+    assert err.code == "DECK_FRONTMATTER_INVALID"
+
+
 # ---------------------------------------------------------------------------
-# Punctuation, parentheses, DFCs
+# Punctuation, parentheses, DFCs, long set codes
 # ---------------------------------------------------------------------------
 
 
@@ -389,6 +561,30 @@ order: 10
     assert entry.collector_number == "50"
 
 
+def test_card_row_accepts_set_code_longer_than_five_chars():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+1 Sol Ring (PRELEASE) 50
+```
+"""
+    result = parse_board(text, path="long-set.md")
+    assert result.errors == []
+    entry = result.cards[0]
+    assert entry.name == "Sol Ring"
+    assert entry.set_code == "PRELEASE"
+    assert entry.collector_number == "50"
+
+
 def test_card_row_rejects_lowercase_set_code():
     text = """---
 schema: hermes-mtg/board/v1
@@ -408,6 +604,229 @@ order: 10
     result = parse_board(text, path="lowercase-set.md")
     err = _only_error(result)
     assert err.code == "CARD_ROW_INVALID"
+
+
+def test_ordinary_parenthetical_name_without_printing_parses():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+1 Urza's Saga (Urza Block)
+```
+"""
+    result = parse_board(text, path="ordinary-parens.md")
+    assert result.errors == []
+    assert result.cards[0].name == "Urza's Saga (Urza Block)"
+
+
+# ---------------------------------------------------------------------------
+# Forbidden provider/Markdown syntax inside decklist fences
+# ---------------------------------------------------------------------------
+
+
+def test_markdown_link_inside_fence_rejected():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+1 [Sol Ring](https://scryfall.com/card/ltc/50)
+```
+"""
+    result = parse_board(text, path="link-in-fence.md")
+    err = _only_error(result)
+    assert err.code == "CARD_ROW_INVALID"
+
+
+def test_raw_url_inside_fence_rejected():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+1 Sol Ring https://scryfall.com/card/ltc/50
+```
+"""
+    result = parse_board(text, path="url-in-fence.md")
+    err = _only_error(result)
+    assert err.code == "CARD_ROW_INVALID"
+
+
+def test_em_dash_rationale_inside_fence_rejected():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+1 Sol Ring \u2014 great ramp
+```
+"""
+    result = parse_board(text, path="em-dash-in-fence.md")
+    err = _only_error(result)
+    assert err.code == "CARD_ROW_INVALID"
+
+
+def test_finish_marker_inside_fence_rejected():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+1 Sol Ring *F*
+```
+"""
+    result = parse_board(text, path="finish-in-fence.md")
+    err = _only_error(result)
+    assert err.code == "CARD_ROW_INVALID"
+
+
+def test_bullet_inside_fence_rejected():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Veggies
+
+```decklist
+- 1 Sol Ring
+```
+"""
+    result = parse_board(text, path="bullet-in-fence.md")
+    err = _only_error(result)
+    assert err.code == "CARD_ROW_INVALID"
+
+
+def test_blank_line_inside_fence_rejected():
+    text = (
+        "---\n"
+        "schema: hermes-mtg/board/v1\n"
+        "name: Mainboard\n"
+        "kind: mainboard\n"
+        "order: 10\n"
+        "---\n"
+        "\n"
+        "## Deck\n"
+        "\n"
+        "### Veggies\n"
+        "\n"
+        "```decklist\n"
+        "1 Sol Ring\n"
+        "\n"
+        "1 Mind Stone\n"
+        "```\n"
+    )
+    result = parse_board(text, path="blank-in-fence.md")
+    codes = [e.code for e in result.errors]
+    assert "CARD_ROW_INVALID" in codes
+
+
+def test_whitespace_only_line_inside_fence_rejected():
+    text = (
+        "---\n"
+        "schema: hermes-mtg/board/v1\n"
+        "name: Mainboard\n"
+        "kind: mainboard\n"
+        "order: 10\n"
+        "---\n"
+        "\n"
+        "## Deck\n"
+        "\n"
+        "### Veggies\n"
+        "\n"
+        "```decklist\n"
+        "1 Sol Ring\n"
+        "   \n"
+        "1 Mind Stone\n"
+        "```\n"
+    )
+    result = parse_board(text, path="ws-only-in-fence.md")
+    codes = [e.code for e in result.errors]
+    assert "CARD_ROW_INVALID" in codes
+
+
+def test_indented_fence_opener_rejected():
+    text = (
+        "---\n"
+        "schema: hermes-mtg/board/v1\n"
+        "name: Mainboard\n"
+        "kind: mainboard\n"
+        "order: 10\n"
+        "---\n"
+        "\n"
+        "## Deck\n"
+        "\n"
+        "### Veggies\n"
+        "\n"
+        " ```decklist\n"
+        "1 Sol Ring\n"
+        "```\n"
+    )
+    result = parse_board(text, path="indented-opener.md")
+    codes = [e.code for e in result.errors]
+    assert "DECKLIST_FENCE_INVALID" in codes
+
+
+def test_trailing_whitespace_fence_opener_rejected():
+    text = (
+        "---\n"
+        "schema: hermes-mtg/board/v1\n"
+        "name: Mainboard\n"
+        "kind: mainboard\n"
+        "order: 10\n"
+        "---\n"
+        "\n"
+        "## Deck\n"
+        "\n"
+        "### Veggies\n"
+        "\n"
+        "```decklist \n"
+        "1 Sol Ring\n"
+        "```\n"
+    )
+    result = parse_board(text, path="trailing-ws-opener.md")
+    codes = [e.code for e in result.errors]
+    assert "DECKLIST_FENCE_INVALID" in codes
 
 
 # ---------------------------------------------------------------------------
@@ -535,11 +954,11 @@ order: 10
 
 
 # ---------------------------------------------------------------------------
-# Missing categories -> Uncategorized
+# Category required for every decklist fence
 # ---------------------------------------------------------------------------
 
 
-def test_fence_without_category_renders_uncategorized():
+def test_fence_without_category_is_invalid():
     text = """---
 schema: hermes-mtg/board/v1
 name: Mainboard
@@ -554,6 +973,28 @@ order: 10
 ```
 """
     result = parse_board(text, path="no-category.md")
+    err = _only_error(result)
+    assert err.code == "DECKLIST_FENCE_INVALID"
+    assert result.cards == []
+
+
+def test_fence_with_literal_uncategorized_heading_parses():
+    text = """---
+schema: hermes-mtg/board/v1
+name: Mainboard
+kind: mainboard
+order: 10
+---
+
+## Deck
+
+### Uncategorized
+
+```decklist
+1 Sol Ring
+```
+"""
+    result = parse_board(text, path="literal-uncategorized.md")
     assert result.errors == []
     assert result.cards[0].category_path == ("Uncategorized",)
 

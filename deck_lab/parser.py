@@ -32,18 +32,63 @@ CARD_ROW_RE = re.compile(r"^(?P<qty>\d+) (?P<rest>.+)$")
 
 # Recognizes a *candidate* trailing printing annotation: "<name> (CODE)" with
 # an optional " <collector>". CODE is intentionally permissive here (any
-# alnum run of 2-5 chars) so we can tell the difference between "a real
-# printing annotation (possibly malformed/lowercase)" and "a card name that
-# simply happens to contain parentheses" (e.g. "B.F.M. (Big Furry Monster)",
-# whose parenthetical content contains spaces and is therefore never treated
-# as a printing annotation at all).
+# alnum run of 2+ chars, no fixed upper bound per contract section 5) so we
+# can tell the difference between "a real printing annotation (possibly
+# malformed/lowercase/incomplete)" and "a card name that simply happens to
+# contain parentheses" (e.g. "B.F.M. (Big Furry Monster)", whose parenthetical
+# content contains spaces and is therefore never treated as a printing
+# annotation at all).
 PRINTING_SUFFIX_RE = re.compile(
-    r"^(?P<name>.+) \((?P<set>[A-Za-z0-9]{2,5})\)(?: (?P<collector>\S+))?$"
+    r"^(?P<name>.+) \((?P<set>[A-Za-z0-9]{2,})\)(?: (?P<collector>\S+))?$"
 )
-SET_CODE_RE = re.compile(r"^[A-Za-z0-9]{2,5}$")
+SET_CODE_RE = re.compile(r"^[A-Z0-9]{2,}$")
 
-FENCE_LINE_RE = re.compile(r"^```(\S*)$")
 HEADING_RE = re.compile(r"^(#{1,6}) (.+)$")
+
+# Structural provider/Markdown syntax that is never legal inside a
+# ```decklist fence (contract section 5, rules 8-10).
+FORBIDDEN_ROW_PATTERNS = (
+    (re.compile(r"\[[^\]]*\]\([^)]*\)"), "Markdown links are not allowed in decklist fences"),
+    (re.compile(r"https?://"), "Raw URLs are not allowed in decklist fences"),
+    (re.compile(r"\u2014"), "Em-dash annotations are not allowed in decklist fences"),
+    (re.compile(r"\[[^\]]+\]"), "Bracketed tags/language markers are not allowed in decklist fences"),
+    (re.compile(r"\*[^*]+\*"), "Finish/annotation markers are not allowed in decklist fences"),
+    (re.compile(r"\$\d"), "Price markers are not allowed in decklist fences"),
+    (re.compile(r"#\w"), "Tags are not allowed in decklist fences"),
+)
+
+# Deck frontmatter keys that are derived/authoritative elsewhere and MUST NOT
+# be duplicated in canonical deck frontmatter (contract section 2, lines
+# 81-88: commander names, card/section counts, preview image, Scryfall
+# identity, mtime, legality, price, ownership, finish, language).
+PROHIBITED_DECK_KEYS = frozenset(
+    {
+        "commander",
+        "commanders",
+        "card_count",
+        "card_counts",
+        "counts",
+        "section_counts",
+        "image",
+        "image_url",
+        "preview_image",
+        "scryfall_id",
+        "scryfall_ids",
+        "oracle_id",
+        "mtime",
+        "modified",
+        "modified_time",
+        "legality",
+        "legalities",
+        "price",
+        "prices",
+        "ownership",
+        "owned",
+        "finish",
+        "language",
+        "lang",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -90,14 +135,18 @@ def _frontmatter_key_lines(raw_fm_lines: list, start_line: int) -> dict:
 
 
 def _split_frontmatter(text: str, path: str):
-    """Return (frontmatter_dict_or_None, body, fm_error, key_lines, body_start_line).
+    """Return (frontmatter_dict_or_None, body, fm_error, key_lines,
+    body_start_line, frontmatter_line).
 
     fm_error is None, "MISSING", or a ("INVALID", line) tuple for malformed
-    YAML that successfully located an opening fence but failed to parse.
+    or non-mapping YAML. frontmatter_line is a stable source line inside the
+    frontmatter block (the opening "---" line, or the closing "---" line
+    when one was found) suitable as a fallback diagnostic location --
+    callers MUST NOT fall back to body_start_line (a line after the block).
     """
     file_lines = text.split("\n")
     if not file_lines or file_lines[0] != "---":
-        return None, text, "MISSING", {}, 1
+        return None, text, "MISSING", {}, 1, 1
 
     closing_idx = None
     for i in range(1, len(file_lines)):
@@ -106,12 +155,13 @@ def _split_frontmatter(text: str, path: str):
             break
 
     if closing_idx is None:
-        return None, text, "MISSING", {}, 1
+        return None, text, "MISSING", {}, 1, 1
 
     raw_fm_lines = file_lines[1:closing_idx]
     raw_fm = "\n".join(raw_fm_lines)
     body = "\n".join(file_lines[closing_idx + 1 :])
     body_start_line = closing_idx + 2  # 1-indexed line following closing ---
+    closing_line = closing_idx + 1  # 1-indexed closing '---' line
 
     try:
         fm = yaml.safe_load(raw_fm)
@@ -120,32 +170,23 @@ def _split_frontmatter(text: str, path: str):
         mark = getattr(exc, "problem_mark", None)
         if mark is not None:
             line = mark.line + 2  # +1 for opening '---' line, +1 for 0-index
-        return None, body, ("INVALID", line), {}, body_start_line
+        return None, body, ("INVALID", line), {}, body_start_line, closing_line
 
     if fm is None:
         fm = {}
     if not isinstance(fm, dict):
-        return None, body, ("INVALID", 2), {}, body_start_line
+        return None, body, ("INVALID", 2), {}, body_start_line, closing_line
 
     key_lines = _frontmatter_key_lines(raw_fm_lines, start_line=2)
-    return fm, body, None, key_lines, body_start_line
+    return fm, body, None, key_lines, body_start_line, closing_line
 
 
 def parse_deck_readme(text: str, path: str) -> ParseResult:
     """Validate a deck README's frontmatter (contract section 2)."""
     errors: list = []
-    fm, _body, fm_error, key_lines, body_start_line = _split_frontmatter(text, path)
-
-    if fm_error == "MISSING" or fm is None or "schema" not in fm:
-        errors.append(
-            ValidationError(
-                code="DECK_FRONTMATTER_MISSING",
-                message="Deck README missing required frontmatter/schema field",
-                path=path,
-                line=1 if fm_error == "MISSING" else key_lines.get("schema", body_start_line),
-            )
-        )
-        return ParseResult(cards=[], errors=errors)
+    fm, _body, fm_error, key_lines, body_start_line, closing_line = _split_frontmatter(
+        text, path
+    )
 
     if isinstance(fm_error, tuple) and fm_error[0] == "INVALID":
         errors.append(
@@ -158,18 +199,29 @@ def parse_deck_readme(text: str, path: str) -> ParseResult:
         )
         return ParseResult(cards=[], errors=errors)
 
+    if fm_error == "MISSING" or fm is None or "schema" not in fm:
+        errors.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_MISSING",
+                message="Deck README missing required frontmatter/schema field",
+                path=path,
+                line=1 if fm_error == "MISSING" else key_lines.get("schema", closing_line),
+            )
+        )
+        return ParseResult(cards=[], errors=errors)
+
     if fm.get("schema") != DECK_SCHEMA_V1:
         errors.append(
             ValidationError(
                 code="DECK_SCHEMA_UNSUPPORTED",
                 message=f"Unsupported deck schema: {fm.get('schema')!r}",
                 path=path,
-                line=key_lines.get("schema", body_start_line),
+                line=key_lines.get("schema", closing_line),
             )
         )
         return ParseResult(cards=[], errors=errors)
 
-    error = _validate_deck_fields(fm, key_lines, path, body_start_line)
+    error = _validate_deck_fields(fm, key_lines, path, closing_line)
     if error is not None:
         errors.append(error)
         return ParseResult(cards=[], errors=errors)
@@ -194,6 +246,16 @@ def _validate_deck_fields(
             line=fallback_line,
         )
 
+    prohibited_present = [k for k in fm if k in PROHIBITED_DECK_KEYS]
+    if prohibited_present:
+        key = prohibited_present[0]
+        return ValidationError(
+            code="DECK_FRONTMATTER_INVALID",
+            message=f"Prohibited derived/authoritative key in deck frontmatter: {key!r}",
+            path=path,
+            line=_field_line(key_lines, key, fallback_line),
+        )
+
     name = fm.get("name")
     if not isinstance(name, str) or not name.strip():
         return ValidationError(
@@ -213,7 +275,7 @@ def _validate_deck_fields(
         )
 
     status = fm.get("status")
-    if not isinstance(status, str) or not status.strip() or status != status.lower():
+    if not isinstance(status, str) or not status.strip():
         return ValidationError(
             code="DECK_FRONTMATTER_INVALID",
             message=f"Invalid status: {status!r}",
@@ -222,10 +284,8 @@ def _validate_deck_fields(
         )
 
     color_identity = fm.get("color_identity")
-    if (
-        not isinstance(color_identity, list)
-        or any(c not in COLOR_IDENTITY_VALUES for c in color_identity)
-        or len(set(color_identity)) != len(color_identity)
+    if not isinstance(color_identity, list) or any(
+        not isinstance(c, str) for c in color_identity
     ):
         return ValidationError(
             code="DECK_FRONTMATTER_INVALID",
@@ -233,6 +293,37 @@ def _validate_deck_fields(
             path=path,
             line=_field_line(key_lines, "color_identity", fallback_line),
         )
+    if any(c not in COLOR_IDENTITY_VALUES for c in color_identity) or len(
+        set(color_identity)
+    ) != len(color_identity):
+        return ValidationError(
+            code="DECK_FRONTMATTER_INVALID",
+            message=f"Invalid color_identity: {color_identity!r}",
+            path=path,
+            line=_field_line(key_lines, "color_identity", fallback_line),
+        )
+
+    if "tags" in fm:
+        tags = fm.get("tags")
+        if not isinstance(tags, list) or any(not isinstance(t, str) for t in tags):
+            return ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message=f"Invalid tags: {tags!r}",
+                path=path,
+                line=_field_line(key_lines, "tags", fallback_line),
+            )
+
+    if "sources" in fm:
+        sources = fm.get("sources")
+        if not isinstance(sources, list) or any(
+            not isinstance(s, dict) for s in sources
+        ):
+            return ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message=f"Invalid sources: {sources!r}",
+                path=path,
+                line=_field_line(key_lines, "sources", fallback_line),
+            )
 
     return None
 
@@ -242,18 +333,9 @@ def parse_board(text: str, path: str) -> ParseResult:
     errors: list = []
     cards: list = []
 
-    fm, body, fm_error, key_lines, body_start_line = _split_frontmatter(text, path)
-
-    if fm_error == "MISSING" or fm is None or "schema" not in fm:
-        errors.append(
-            ValidationError(
-                code="BOARD_FRONTMATTER_MISSING",
-                message="Board file missing required frontmatter/schema field",
-                path=path,
-                line=1 if fm_error == "MISSING" else key_lines.get("schema", body_start_line),
-            )
-        )
-        return ParseResult(cards=[], errors=errors)
+    fm, body, fm_error, key_lines, body_start_line, closing_line = _split_frontmatter(
+        text, path
+    )
 
     if isinstance(fm_error, tuple) and fm_error[0] == "INVALID":
         errors.append(
@@ -266,13 +348,24 @@ def parse_board(text: str, path: str) -> ParseResult:
         )
         return ParseResult(cards=[], errors=errors)
 
+    if fm_error == "MISSING" or fm is None or "schema" not in fm:
+        errors.append(
+            ValidationError(
+                code="BOARD_FRONTMATTER_MISSING",
+                message="Board file missing required frontmatter/schema field",
+                path=path,
+                line=1 if fm_error == "MISSING" else key_lines.get("schema", closing_line),
+            )
+        )
+        return ParseResult(cards=[], errors=errors)
+
     if fm.get("schema") != BOARD_SCHEMA_V1:
         errors.append(
             ValidationError(
                 code="BOARD_SCHEMA_UNSUPPORTED",
                 message=f"Unsupported board schema: {fm.get('schema')!r}",
                 path=path,
-                line=key_lines.get("schema", body_start_line),
+                line=key_lines.get("schema", closing_line),
             )
         )
         return ParseResult(cards=[], errors=errors)
@@ -285,7 +378,7 @@ def parse_board(text: str, path: str) -> ParseResult:
                 code="BOARD_FRONTMATTER_INVALID",
                 message=f"Board frontmatter missing required fields: {missing}",
                 path=path,
-                line=body_start_line,
+                line=closing_line,
             )
         )
         return ParseResult(cards=[], errors=errors)
@@ -297,7 +390,7 @@ def parse_board(text: str, path: str) -> ParseResult:
                 code="BOARD_FRONTMATTER_INVALID",
                 message=f"Invalid name: {name!r}",
                 path=path,
-                line=_field_line(key_lines, "name", body_start_line),
+                line=_field_line(key_lines, "name", closing_line),
             )
         )
         return ParseResult(cards=[], errors=errors)
@@ -309,7 +402,7 @@ def parse_board(text: str, path: str) -> ParseResult:
                 code="BOARD_KIND_INVALID",
                 message=f"Invalid board kind: {kind!r}",
                 path=path,
-                line=_field_line(key_lines, "kind", body_start_line),
+                line=_field_line(key_lines, "kind", closing_line),
             )
         )
         return ParseResult(cards=[], errors=errors)
@@ -321,7 +414,7 @@ def parse_board(text: str, path: str) -> ParseResult:
                 code="BOARD_FRONTMATTER_INVALID",
                 message=f"Invalid order: {order!r}",
                 path=path,
-                line=_field_line(key_lines, "order", body_start_line),
+                line=_field_line(key_lines, "order", closing_line),
             )
         )
         return ParseResult(cards=[], errors=errors)
@@ -336,37 +429,47 @@ def parse_board(text: str, path: str) -> ParseResult:
     h1_count = 0
     in_fence = False
     fence_valid = False
+    fence_open_line: Optional[int] = None
 
     for idx, raw_line in enumerate(lines):
         line_no = body_start_line + idx
         stripped = raw_line.strip()
 
         if in_fence:
-            if stripped == "```":
+            if raw_line == "```":
                 in_fence = False
                 fence_valid = False
+                fence_open_line = None
                 continue
             if stripped.startswith("```"):
                 errors.append(
                     ValidationError(
                         code="DECKLIST_FENCE_INVALID",
-                        message=f"Malformed or nested fence marker: {stripped!r}",
+                        message=f"Malformed or nested fence marker: {raw_line!r}",
                         path=path,
                         line=line_no,
-                        context=stripped,
+                        context=raw_line,
                     )
                 )
                 continue
             if not stripped:
+                errors.append(
+                    ValidationError(
+                        code="CARD_ROW_INVALID",
+                        message="Blank or whitespace-only lines are invalid inside a decklist fence",
+                        path=path,
+                        line=line_no,
+                        context=raw_line,
+                    )
+                )
                 continue
             if fence_valid:
-                effective_category = category_path if category_path else ("Uncategorized",)
                 _parse_card_row(
                     raw_line,
                     line_no,
                     path,
                     current_zone,
-                    effective_category,
+                    category_path,
                     cards,
                     errors,
                 )
@@ -374,8 +477,8 @@ def parse_board(text: str, path: str) -> ParseResult:
 
         if stripped.startswith("```"):
             in_fence = True
-            fence_match = FENCE_LINE_RE.match(stripped)
-            fence_valid = bool(fence_match) and fence_match.group(1) == "decklist"
+            fence_open_line = line_no
+            valid_opener = raw_line == "```decklist"
             if current_zone is None:
                 errors.append(
                     ValidationError(
@@ -387,16 +490,30 @@ def parse_board(text: str, path: str) -> ParseResult:
                     )
                 )
                 fence_valid = False
-            elif not fence_valid:
+            elif not valid_opener:
                 errors.append(
                     ValidationError(
                         code="DECKLIST_FENCE_INVALID",
-                        message=f"Expected ```decklist fence, found {stripped!r}",
+                        message=f"Expected exact ```decklist fence opener, found {raw_line!r}",
                         path=path,
                         line=line_no,
-                        context=stripped,
+                        context=raw_line,
                     )
                 )
+                fence_valid = False
+            elif not category_path:
+                errors.append(
+                    ValidationError(
+                        code="DECKLIST_FENCE_INVALID",
+                        message="Decklist fence has no preceding H3-H6 category in this zone",
+                        path=path,
+                        line=line_no,
+                        context=raw_line,
+                    )
+                )
+                fence_valid = False
+            else:
+                fence_valid = True
             continue
 
         if not stripped:
@@ -480,7 +597,7 @@ def parse_board(text: str, path: str) -> ParseResult:
                 code="DECKLIST_FENCE_INVALID",
                 message="Reached end of file with an unclosed ```decklist fence",
                 path=path,
-                line=body_start_line + len(lines) - 1,
+                line=fence_open_line if fence_open_line is not None else body_start_line,
             )
         )
 
@@ -508,6 +625,19 @@ def _parse_card_row(
         )
         return
 
+    for pattern, message in FORBIDDEN_ROW_PATTERNS:
+        if pattern.search(raw_line):
+            errors.append(
+                ValidationError(
+                    code="CARD_ROW_INVALID",
+                    message=message,
+                    path=path,
+                    line=line_no,
+                    context=raw_line,
+                )
+            )
+            return
+
     row = raw_line
     match = CARD_ROW_RE.match(row)
     if not match:
@@ -529,11 +659,11 @@ def _parse_card_row(
     collector = None
 
     printing_match = PRINTING_SUFFIX_RE.match(rest)
-    if printing_match and SET_CODE_RE.match(printing_match.group("set")):
+    if printing_match:
         maybe_set = printing_match.group("set")
         maybe_collector = printing_match.group("collector")
 
-        if maybe_set != maybe_set.upper():
+        if not SET_CODE_RE.match(maybe_set):
             errors.append(
                 ValidationError(
                     code="CARD_ROW_INVALID",
