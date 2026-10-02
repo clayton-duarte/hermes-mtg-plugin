@@ -1,0 +1,45 @@
+{
+  "head_commit_before_recording": "0cf61b7a… (Fix clickRowBackground to target trusted hit-test point on row itself)",
+  "record_command": "node scripts/record_deck_lab_demo.mjs /Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_corrected.mp4",
+  "record_exit_code": 0,
+  "output_path": "/Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_corrected.mp4",
+  "ffprobe_verified": {
+    "duration_seconds": 19.134396,
+    "width": 2440,
+    "height": 1600,
+    "nb_frames": 42,
+    "bytes": 967478
+  },
+  "self_reported_by_script": {
+    "totalFrames": 42,
+    "captureWallMs": 19136,
+    "fps": 2.195,
+    "bytes": 967478
+  },
+  "beats_demonstrated": [
+    "Nelly fixture, two internal columns, recursive indentation/counts, long-name truncation (hold 2.2s)",
+    "pointer hover -> Sol Ring preview (hold 1.2s)",
+    "keyboard Tab focus -> Nelly Borca, Impulsive Accuser preview (hold 1.2s)",
+    "pin via dedicated pin button -> pinned (hold 0.9s)",
+    "hover Sol Ring while pinned -- preview stays on pinned card (hold 0.9s)",
+    "unpin via dedicated pin button (hold 0.9s)",
+    "Joined Researchers name click -> exact openExternal URL https://scryfall.com/card/sos/23/joined-researchers-secret-rendezvous?utm_source=api, pin unchanged (hold 1.6s)",
+    "loading placeholder (Agrus Kos, Spirit of Justice) (hold 1.0s)",
+    "error placeholder (Thought Vessel) (hold 1.0s)",
+    "DFC toggle Joined Researchers -> Secret Rendezvous, mana 1W -> 1WW, same combined-art img src retained (hold 1.3s + 0.9s)",
+    "Sol Ring art -> Joined Researchers with no stale Sol Ring image (asserted via data-loaded-src) (hold 0.7s + 1.3s)",
+    "invalid candidate diagnostics (heading + exact fixture path) held visibly (hold 1.8s)"
+  ],
+  "self_validation": "Every beat asserts its own precondition/postcondition in-page (exact row/aria-label selectors matching check_deck_lab_interactions.mjs, not textContent.includes scans) and throws + deletes the frame dir on failure before any ffmpeg encode runs.",
+  "selector_fidelity": "rowSelector/pinButtonSelector/nameButtonSelector are identical to scripts/check_deck_lab_interactions.mjs's exact [role=group][aria-label=...] + descendant-button selectors -- never a first-match button.textContent.includes() scan.",
+  "timing_fidelity": "fps for the ffmpeg encode is computed as totalFrames / (captureWallMs / 1000) -- i.e. actual frames over actual measured capture wall-clock time -- not a nominal sampling-interval fps, so the encoded MP4 duration matches real elapsed recording time (confirmed by independent ffprobe: 19.13s matches the script's self-reported captureWallMs of 19136ms).",
+  "verification_commands": [
+    "node scripts/check_deck_lab_interactions.mjs -> rc=0, 19/19 named checks pass (see run log)",
+    "DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK=1 node scripts/check_deck_lab_interactions.mjs -> rc=1, trusted_row_input_pins_via_card_row_onclick fails with isTrusted:false (pin still flips true) -- proves the check discriminates real input",
+    "DECK_LAB_LIVE_CDP=1 pytest -q tests/test_ui_interactions.py -> 1 passed in 140.17s",
+    "pytest -q tests/ -> 3 failed (pre-existing unrelated adapter/parser/scanner lane failures, same as before this card), 97 passed, 1 skipped",
+    "python3 .../no-build-plugin-ui-edits/scripts/check_plugin_js.py desktop/plugin.js -> loadable, register OK id=deck-lab",
+    "hermes plugins validate . --json -> ok:true (security scan: safe, desktop surface: stays inside plugin SDK surface)",
+    "synthetic merge: git worktree detached at 0cf61b7, git merge --no-commit --no-ff origin/main -> clean, pytest -q tests/ -> 266 passed, 1 skipped"
+  ]
+}
