@@ -867,7 +867,7 @@ function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, 
       children: [
         jsx('div', { className: 'font-semibold text-destructive', children: 'This deck is invalid.' }),
         deck.errors.map((error, index) =>
-          jsxs('div', { key: index, className: 'text-(--ui-text-tertiary)', children: [error.code, ': ', error.message, ' (', error.path, ')'] })
+          jsxs('div', { key: index, className: 'text-(--ui-text-tertiary) break-all', 'data-testid': 'invalid-diagnostic', children: [error.code, ': ', error.message, ' (', error.path, ')'] })
         )
       ]
     })
@@ -911,39 +911,21 @@ function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, 
  *  its own loaded state per-src here, so even without the external key a
  *  card/face switch cannot render the previous image under the new title --
  *  it shows a neutral loading placeholder until *this* src's onLoad fires. */
-// t_bda55c25 DETERMINISTIC MUTATION CONTROL (temporary, restored before
-// commit): when DECK_LAB_MUTATION_STALE_ART=1 is set at process start, the
-// visible-image guard is deliberately broken -- the <img> is always shown
-// and onLoad never updates loadedSrc -- so the named
-// `no_stale_image_under_new_title` check must observe the stale bitmap
-// (imageGenuinelyNotStale:false). This proves the check detects a broken
-// guard, not merely that it passes under the correct implementation.
-function __deckLabMutationStaleArtActive__() {
-  try {
-    return typeof window !== 'undefined' && window.localStorage && window.localStorage.getItem('DECK_LAB_MUTATION_STALE_ART') === '1'
-  } catch {
-    return false
-  }
-}
-
 function ImageWithLoadingGuard({ alt, src }) {
   const [loadedSrc, setLoadedSrc] = useState(null)
-  const mutationActive = __deckLabMutationStaleArtActive__()
 
   useEffect(() => {
-    if (!mutationActive) setLoadedSrc(null)
-  }, [src, mutationActive])
-
-  const effectiveLoadedSrc = mutationActive ? src : loadedSrc
+    setLoadedSrc(null)
+  }, [src])
 
   return jsxs('div', {
     className: 'relative w-full',
     children: [
-      effectiveLoadedSrc !== src &&
+      loadedSrc !== src &&
         jsx('div', { className: 'flex h-48 items-center justify-center rounded bg-(--ui-row-hover-background) text-[0.75rem] text-(--ui-text-quaternary)', children: 'Loading art…' }),
       jsx('img', {
         alt,
-        className: cn('w-full rounded', effectiveLoadedSrc !== src && 'hidden'),
+        className: cn('w-full rounded', loadedSrc !== src && 'hidden'),
         src,
         // Exposes the src whose onLoad actually completed, so a live proof
         // harness can assert deterministically (no race-tuned sleep)
@@ -952,7 +934,7 @@ function ImageWithLoadingGuard({ alt, src }) {
         // necessarily stale and any post-switch sleep window is long
         // enough for a real network fetch.
         'data-loaded-src': loadedSrc ?? '',
-        onLoad: () => { if (!mutationActive) setLoadedSrc(src) }
+        onLoad: () => setLoadedSrc(src)
       })
     ]
   })

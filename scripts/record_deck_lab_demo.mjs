@@ -99,7 +99,6 @@ async function main() {
     // Electron preload bridge, reveal the pane, select the Nelly Borca
     // deck -- same preconditions check_deck_lab_interactions.mjs
     // establishes.
-    await d.evalJs(`localStorage.removeItem('DECK_LAB_MUTATION_STALE_ART')`)
     await d.evalJs('location.reload()')
     await d.sleep(3500)
     const bridgeReady = await d.evalJs(`
@@ -333,18 +332,29 @@ async function main() {
     await d.sleep(400)
     const diagnostics = await d.evalJs(`
       (() => {
+        const el = document.querySelector('[data-testid="invalid-diagnostic"]')
         const text = document.body.innerText
+        const exactText = el ? el.textContent : null
+        const rect = el ? el.getBoundingClientRect() : null
+        const parentRect = el ? el.parentElement.getBoundingClientRect() : null
+        const withinColumn = rect && parentRect ? rect.right <= parentRect.right + 1 : false
+        const noHorizontalScroll = el ? el.scrollWidth <= el.clientWidth + 1 : false
         return {
           hasHeading: text.includes('This deck is invalid.'),
-          hasCode: text.includes('CARD_QUANTITY_INVALID'),
-          hasMessage: text.includes('Quantity must be a positive integer'),
-          hasPath: text.includes('tests/fixtures/malformed/card_quantity_invalid_zero.md')
+          exactText,
+          withinColumn,
+          noHorizontalScroll
         }
       })()
     `)
-    assertSuccess(diagnostics.hasHeading && diagnostics.hasCode && diagnostics.hasMessage && diagnostics.hasPath,
-      `invalid candidate diagnostics not shown exactly (${JSON.stringify(diagnostics)})`)
-    await captureFor(1800, 'beat 9: invalid candidate diagnostics (exact heading/code/message/path held)')
+    const expectedExactText = 'CARD_QUANTITY_INVALID: Quantity must be a positive integer (tests/fixtures/malformed/card_quantity_invalid_zero.md)'
+    assertSuccess(
+      diagnostics.hasHeading &&
+      diagnostics.exactText === expectedExactText &&
+      diagnostics.withinColumn &&
+      diagnostics.noHorizontalScroll,
+      `invalid candidate diagnostics not shown exactly/visibly contained (${JSON.stringify(diagnostics)})`)
+    await captureFor(1800, 'beat 9: invalid candidate diagnostics (exact heading/code/message/path held, wrapped not clipped)')
 
     const totalFrames = frameIndex
     assertSuccess(totalFrames > 0, 'no frames captured')

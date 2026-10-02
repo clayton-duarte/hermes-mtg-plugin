@@ -37,15 +37,6 @@ const EXACT_JOINED_RESEARCHERS_URL = 'https://scryfall.com/card/sos/23/joined-re
 // flipped (which a synthetic dispatch can also produce).
 const USE_SYNTHETIC_ROW_CLICK = process.env.DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK === '1'
 
-// Mutation control for the stale-art guard (required by the card): when
-// set, the pane's own localStorage flag is set BEFORE the cold reload, so
-// ImageWithLoadingGuard runs in its deliberately-broken mode (always
-// visible, onLoad never updates loadedSrc). The named
-// `no_stale_image_under_new_title` check must then fail with
-// imageGenuinelyNotStale:false, proving the check detects a broken
-// visible-image guard rather than merely passing under the correct one.
-const USE_STALE_ART_MUTATION = process.env.DECK_LAB_MUTATION_STALE_ART === '1'
-
 const results = {}
 let failures = 0
 
@@ -65,11 +56,6 @@ async function main() {
 
   // Cold reload for a known-clean starting state, then wait for the
   // Electron preload bridge to exist before arming the openExternal spy.
-  if (USE_STALE_ART_MUTATION) {
-    await d.evalJs(`localStorage.setItem('DECK_LAB_MUTATION_STALE_ART', '1')`)
-  } else {
-    await d.evalJs(`localStorage.removeItem('DECK_LAB_MUTATION_STALE_ART')`)
-  }
   await d.evalJs('location.reload()')
   await d.sleep(3500)
 
