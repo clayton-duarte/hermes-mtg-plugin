@@ -138,6 +138,67 @@ def test_export_text_is_moxfield_bulk_importable():
     assert boards["Rest in Peace"] == "sideboard"
 
 
+def test_set_collector_coordinates_export_and_round_trip():
+    cards = [Card(quantity=1, name="Lightning Bolt", set_code="2X2", collector_number="117")]
+    export = export_cards(cards)
+    assert "(2X2) 117" in export.text
+    reimported = import_text(export.text)
+    bolt = reimported.cards[0]
+    assert bolt.name == "Lightning Bolt"
+    assert bolt.set_code == "2X2"
+    assert bolt.collector_number == "117"
+
+
+def test_symbolic_collector_number_is_not_folded_into_name():
+    text = "1 Lightning Bolt (2X2) 2\u2605\n"
+    result = import_text(text)
+    bolt = result.cards[0]
+    assert bolt.name == "Lightning Bolt"
+    assert bolt.collector_number == "2\u2605"
+
+
+def test_hyphenated_collector_number_is_not_folded_into_name():
+    text = "1 Lightning Bolt (C18) C18-138\n"
+    result = import_text(text)
+    bolt = result.cards[0]
+    assert bolt.name == "Lightning Bolt"
+    assert bolt.collector_number == "C18-138"
+
+
+@pytest.mark.parametrize(
+    "header,expected_board",
+    [
+        ("COMMANDER:", "commander"),
+        ("Mainboard:", "mainboard"),
+        ("SIDEBOARD:", "sideboard"),
+        ("MayBeBoard:", "maybeboard"),
+    ],
+)
+def test_colon_suffixed_case_insensitive_board_headers(header, expected_board):
+    text = f"{header}\n1 Sol Ring\n"
+    result = import_text(text)
+    assert result.cards[0].board == expected_board
+
+
+def test_additional_tags_are_reported_not_silently_dropped():
+    text = "1 Swords to Plowshares #Removal #Instant #Staple\n"
+    result = import_text(text)
+    swords = result.cards[0]
+    assert swords.category == "Removal"
+    assert swords.name == "Swords to Plowshares"
+    assert any("#Instant" in w for w in result.warnings)
+    assert any("#Staple" in w for w in result.warnings)
+
+
+def test_language_marker_is_not_stored_as_canonical_finish():
+    text = "1 Lightning Bolt *Japanese*\n"
+    result = import_text(text)
+    bolt = result.cards[0]
+    assert bolt.name == "Lightning Bolt"
+    assert bolt.finish is None
+    assert any("*Japanese*" in w and "language" in w.lower() for w in result.warnings)
+
+
 def test_no_network_imports_in_adapter_module():
     tree = ast.parse(ADAPTER_SOURCE.read_text())
     banned = {"requests", "urllib", "http", "httpx", "socket", "aiohttp"}
