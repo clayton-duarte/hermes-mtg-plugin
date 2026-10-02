@@ -93,6 +93,24 @@ ERROR_SCRYFALL = {
     "error": "REMOTE_CARD_UNRESOLVED",
 }
 
+# A real in-deck card ("Keeper of the Accord") deliberately given a resolved
+# record whose `scryfall_uri` host is NOT scryfall.com. This is a
+# deterministic fixture state exercising the "never navigate off a
+# non-Scryfall URL" suppression path (CardRow computes `validUrl` and
+# disables the name button / no-ops the click when the host check fails) --
+# not a claim this is Keeper of the Accord's real Scryfall record.
+NON_SCRYFALL_SCRYFALL = {
+    "state": "cached",
+    "name": "Keeper of the Accord",
+    "oracle_id": "rejected-non-scryfall-host-fixture",
+    "scryfall_id": "rejected-non-scryfall-host-fixture",
+    "scryfall_uri": "https://example.com/not-a-scryfall-host",
+    "mana_cost": "{2}{W}",
+    "layout": "normal",
+    "image_uris": {},
+    "card_faces": [],
+}
+
 
 def _resolve(name: str) -> dict | None:
     if name == "Nelly Borca, Impulsive Accuser":
@@ -105,6 +123,8 @@ def _resolve(name: str) -> dict | None:
         return LOADING_SCRYFALL
     if name == "Thought Vessel":
         return ERROR_SCRYFALL
+    if name == "Keeper of the Accord":
+        return NON_SCRYFALL_SCRYFALL
     return None
 
 

@@ -254,7 +254,18 @@ const FIXTURE = {
                         },
                         {
                           quantity: 1,
-                          name: "Keeper of the Accord"
+                          name: "Keeper of the Accord",
+                          scryfall: {
+                            state: "cached",
+                            name: "Keeper of the Accord",
+                            oracle_id: "rejected-non-scryfall-host-fixture",
+                            scryfall_id: "rejected-non-scryfall-host-fixture",
+                            scryfall_uri: "https://example.com/not-a-scryfall-host",
+                            mana_cost: "{2}{W}",
+                            layout: "normal",
+                            image_uris: {},
+                            card_faces: []
+                          }
                         }
                       ]
                     },

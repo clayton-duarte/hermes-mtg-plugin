@@ -86,7 +86,7 @@ export async function connect(wsUrl) {
       (() => {
         const el = ${selectorExpr}
         if (!el) return null
-        el.scrollIntoView({ block: 'center', inline: 'center' })
+        el.scrollIntoView({ block: 'center', inline: 'nearest' })
         const r = el.getBoundingClientRect()
         return { x: r.x + r.width / 2, y: r.y + r.height / 2, width: r.width, height: r.height }
       })()
@@ -127,6 +127,43 @@ export async function connect(wsUrl) {
     return box
   }
 
+  // Clicks somewhere inside the row-group element matched by `selectorExpr`
+  // that is NOT its own name <button> or a `[role=separator]` resize handle
+  // overlapping the row's left edge -- both of which the row's geometric
+  // center/left edge can land on depending on the live pane's current
+  // width. Scans a few candidate x-offsets via elementFromPoint and uses
+  // the first one that resolves to the row itself or a non-interactive
+  // descendant (not BUTTON, not `[role=separator]`), so the click reaches
+  // the row's own onClick (pin toggle) instead of stopPropagation'd or
+  // unrelated UI.
+  async function clickRowBackground(rowSelectorExpr) {
+    const rect = await evalJs(`
+      (() => {
+        const el = ${rowSelectorExpr}
+        if (!el) return null
+        el.scrollIntoView({ block: 'center', inline: 'nearest' })
+        const r = el.getBoundingClientRect()
+        return { x: r.x, y: r.y, width: r.width, height: r.height }
+      })()
+    `)
+    if (!rect) throw new Error(`clickRowBackground: no box model for ${rowSelectorExpr}`)
+    const candidateOffsets = [10, 6, rect.width - 8, rect.width * 0.5, rect.width * 0.3]
+    for (const dx of candidateOffsets) {
+      const px = rect.x + dx
+      const py = rect.y + rect.height / 2
+      // eslint-disable-next-line no-await-in-loop
+      const tag = await evalJs(`document.elementFromPoint(${px}, ${py})?.tagName ?? null`)
+      // eslint-disable-next-line no-await-in-loop
+      const role = await evalJs(`document.elementFromPoint(${px}, ${py})?.getAttribute?.('role') ?? null`)
+      if (tag && tag !== 'BUTTON' && role !== 'separator') {
+        await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: px, y: py, button: 'left', clickCount: 1 })
+        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: px, y: py, button: 'left', clickCount: 1 })
+        return { x: px, y: py, tag, role }
+      }
+    }
+    throw new Error(`clickRowBackground: no safe click point found for ${rowSelectorExpr}`)
+  }
+
   // Real keyboard Tab presses via CDP Input.dispatchKeyEvent, moving focus
   // forward through the DOM's tab order -- exercises onFocus the same way a
   // keyboard user would, rather than calling element.focus() directly.
@@ -137,5 +174,5 @@ export async function connect(wsUrl) {
     }
   }
 
-  return { send, on, sleep, evalJs, boxModelFor, hoverElement, clickElement, pressTab, raw: ws }
+  return { send, on, sleep, evalJs, boxModelFor, hoverElement, clickElement, clickRowBackground, pressTab, raw: ws }
 }
