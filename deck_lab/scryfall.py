@@ -73,6 +73,35 @@ def _identifier_key(identifier: dict) -> tuple:
     return ("name", identifier.get("name"))
 
 
+def identifier_key(identifier: dict) -> tuple:
+    """Public wrapper over the identifier -> cache/result key mapping, so
+    callers outside this module (e.g. the service lane) never reach into
+    the private `_identifier_key`."""
+
+    return _identifier_key(identifier)
+
+
+def resolve_from_cache(identifiers, cache) -> dict:
+    """Cache-only resolution: never performs a network call. Used by
+    callers (e.g. the service lane) that must honor `resolve_remote=True`
+    without a declared `http_client` -- an intentional offline/cache-only
+    fallback rather than a crash or a silent no-op. Entries are served
+    whether fresh or stale (stale-while-revalidate without the
+    revalidate, since there is no transport to revalidate with); anything
+    absent from the cache resolves to `None` (unresolved).
+
+    Returns `{identifier_key: ScryfallProjection | None}`, matching the
+    shape `resolve_collection` returns.
+    """
+
+    results: dict = {}
+    for identifier in identifiers:
+        key = _identifier_key(identifier)
+        entry = cache.get(key) if cache is not None else None
+        results[key] = _projection_from_dict(entry["data"]) if entry is not None else None
+    return results
+
+
 def _wire_identifier(identifier: dict) -> dict:
     """The exact shape POSTed to Scryfall -- strips any caller-side-only
     metadata (e.g. a `name` fallback hint carried alongside set+collector)."""
@@ -139,6 +168,13 @@ class ScryfallCache:
         now = time.time() if now is None else now
         self._data[_cache_key_str(key)] = {"fetched_at": now, "data": projection_dict}
         self._save()
+
+    def entries(self) -> list:
+        """Public read-only snapshot of cached entries, for status/
+        diagnostic reporting only -- callers must never reach into
+        `_data` directly."""
+
+        return list(self._data.values())
 
 
 def _projection_from_dict(data: dict) -> ScryfallProjection:

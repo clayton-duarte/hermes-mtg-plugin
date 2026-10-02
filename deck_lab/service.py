@@ -43,12 +43,6 @@ _ZONE_TO_MOXFIELD_BOARD = {
     "Maybeboard": "maybeboard",
 }
 _MOXFIELD_BOARD_TO_ZONE = {v: k for k, v in _ZONE_TO_MOXFIELD_BOARD.items()}
-_MOXFIELD_BOARD_TO_KIND = {
-    "commander": "mainboard",
-    "mainboard": "mainboard",
-    "sideboard": "sideboard",
-    "maybeboard": "maybeboard",
-}
 
 
 class DeckLabServiceError(Exception):
@@ -202,6 +196,7 @@ class DeckLabService:
 
     def _select_board(self, deck_summary, board_path: Optional[str]):
         if board_path is not None:
+            self._resolve_repo_path(board_path)  # path-safety before semantic lookup
             for board in deck_summary.boards:
                 if board.path == board_path:
                     return board
@@ -209,6 +204,62 @@ class DeckLabService:
         if not deck_summary.boards:
             return None
         return sorted(deck_summary.boards, key=lambda b: b.order)[0]
+
+    def _resolve_remote_projections(self, identifiers: list) -> dict:
+        """Batched Scryfall enrichment/status pass shared by `get_deck`
+        and `validate(resolve_remote=True)`.
+
+        When a real `http_client` is declared, performs the normal
+        batched network resolution. With no declared `http_client`, this
+        is an intentional offline/cache-only fallback: cached projections
+        (fresh or stale) are served and anything absent resolves to
+        `None` (unresolved) -- never a raw transport/attribute crash.
+        """
+
+        if self.http_client is None:
+            return _scryfall.resolve_from_cache(identifiers, self._cache)
+        return _scryfall.resolve_collection(identifiers, http_client=self.http_client, cache=self._cache)
+
+    def _enrich_cards_with_remote(self, cards, *, board_path: str, resolve_remote: bool):
+        """Shared batched Scryfall enrichment/status pass used by both
+        `get_deck` and `validate(resolve_remote=True)`.
+
+        Returns `(cards_serialized, remote_resolved, remote_unresolved_count,
+        remote_warnings)`. `remote_warnings` are `REMOTE_CARD_UNRESOLVED`
+        diagnostics carrying source name/path/line, kept separate from
+        syntactic board validity -- an unresolved remote lookup never makes
+        otherwise-valid Markdown invalid.
+        """
+
+        if not resolve_remote or not cards:
+            return [_serialize(c) for c in cards], False, 0, []
+
+        identifiers = [_scryfall.identifier_for_card(c.set_code, c.collector_number, c.name) for c in cards]
+        projections = self._resolve_remote_projections(identifiers)
+
+        cards_serialized = []
+        remote_unresolved_count = 0
+        remote_warnings = []
+        for card in cards:
+            key = _scryfall.identifier_key(
+                _scryfall.identifier_for_card(card.set_code, card.collector_number, card.name)
+            )
+            projection = projections.get(key)
+            card_dict = _serialize(card)
+            card_dict["scryfall"] = _serialize(projection) if projection is not None else None
+            if projection is None:
+                remote_unresolved_count += 1
+                remote_warnings.append(
+                    {
+                        "code": "REMOTE_CARD_UNRESOLVED",
+                        "severity": "warning",
+                        "name": card.name,
+                        "path": card.source.path if card.source is not None else board_path,
+                        "line": card.source.line if card.source is not None else None,
+                    }
+                )
+            cards_serialized.append(card_dict)
+        return cards_serialized, True, remote_unresolved_count, remote_warnings
 
     def get_deck(self, deck_path, *, board_path=None, resolve_remote=True) -> dict:
         deck_summary = self._find_deck_summary(deck_path)
@@ -222,6 +273,7 @@ class DeckLabService:
         commander_count = 0
         remote_resolved = False
         remote_unresolved_count = 0
+        remote_warnings: list = []
 
         if board_summary is not None:
             board_abs = self._resolve_repo_path(board_summary.path, must_exist=True)
@@ -233,27 +285,14 @@ class DeckLabService:
             total = parse_result.card_count
             commander_count = parse_result.commander_count
 
-            cards = list(parse_result.cards)
-            if resolve_remote and cards:
-                identifiers = [
-                    _scryfall.identifier_for_card(c.set_code, c.collector_number, c.name) for c in cards
-                ]
-                projections = _scryfall.resolve_collection(
-                    identifiers, http_client=self.http_client, cache=self._cache
-                )
-                for card in cards:
-                    key = _scryfall._identifier_key(
-                        _scryfall.identifier_for_card(card.set_code, card.collector_number, card.name)
-                    )
-                    projection = projections.get(key)
-                    card_dict = _serialize(card)
-                    card_dict["scryfall"] = _serialize(projection) if projection is not None else None
-                    if projection is None:
-                        remote_unresolved_count += 1
-                    cards_serialized.append(card_dict)
-                remote_resolved = True
-            else:
-                cards_serialized = [_serialize(c) for c in cards]
+            (
+                cards_serialized,
+                remote_resolved,
+                remote_unresolved_count,
+                remote_warnings,
+            ) = self._enrich_cards_with_remote(
+                list(parse_result.cards), board_path=board_summary.path, resolve_remote=resolve_remote
+            )
 
         return {
             "schema": SERVICE_SCHEMA_V1,
@@ -267,6 +306,7 @@ class DeckLabService:
             "board_errors": board_errors,
             "remote_resolved": remote_resolved,
             "remote_unresolved_count": remote_unresolved_count,
+            "remote_warnings": remote_warnings,
         }
 
     def validate(self, target_path, *, resolve_remote=False) -> dict:
@@ -277,6 +317,18 @@ class DeckLabService:
             decks = _scanner.scan_repository(self.decks_root)
             valid = [d for d in decks if d.valid]
             invalid = [d for d in decks if not d.valid]
+            remote_unresolved_count = 0
+            remote_warnings: list = []
+            if resolve_remote:
+                for deck in decks:
+                    for board in deck.boards:
+                        board_abs = self._resolve_repo_path(board.path, must_exist=True)
+                        parse_result = _parser.parse_board(board_abs.read_text(), path=board.path)
+                        _, _, unresolved, warnings = self._enrich_cards_with_remote(
+                            list(parse_result.cards), board_path=board.path, resolve_remote=True
+                        )
+                        remote_unresolved_count += unresolved
+                        remote_warnings.extend(warnings)
             return {
                 "schema": SERVICE_SCHEMA_V1,
                 "target": rel,
@@ -285,23 +337,37 @@ class DeckLabService:
                 "valid_count": len(valid),
                 "invalid_count": len(invalid),
                 "errors": [e for d in invalid for e in _serialize(d.errors)],
+                "remote_resolved": resolve_remote,
+                "remote_unresolved_count": remote_unresolved_count,
+                "remote_warnings": remote_warnings,
             }
 
         if resolved.is_dir():
             deck_summary = self._find_deck_summary(rel)
             all_errors = list(deck_summary.errors)
             card_total = 0
+            remote_unresolved_count = 0
+            remote_warnings = []
             for board in deck_summary.boards:
                 board_abs = self._resolve_repo_path(board.path, must_exist=True)
                 parse_result = _parser.parse_board(board_abs.read_text(), path=board.path)
                 all_errors.extend(parse_result.errors)
                 card_total += parse_result.card_count
+                if resolve_remote:
+                    _, _, unresolved, warnings = self._enrich_cards_with_remote(
+                        list(parse_result.cards), board_path=board.path, resolve_remote=True
+                    )
+                    remote_unresolved_count += unresolved
+                    remote_warnings.extend(warnings)
             return {
                 "schema": SERVICE_SCHEMA_V1,
                 "target": rel,
                 "valid": not any(e.severity == "error" for e in all_errors),
                 "card_total": card_total,
                 "errors": _serialize(all_errors),
+                "remote_resolved": resolve_remote,
+                "remote_unresolved_count": remote_unresolved_count,
+                "remote_warnings": remote_warnings,
             }
 
         # Single board/README file.
@@ -310,12 +376,22 @@ class DeckLabService:
             parse_result = _parser.parse_deck_readme(text, path=rel)
         else:
             parse_result = _parser.parse_board(text, path=rel)
+        remote_resolved = False
+        remote_unresolved_count = 0
+        remote_warnings = []
+        if resolve_remote:
+            _, remote_resolved, remote_unresolved_count, remote_warnings = self._enrich_cards_with_remote(
+                list(parse_result.cards), board_path=rel, resolve_remote=True
+            )
         return {
             "schema": SERVICE_SCHEMA_V1,
             "target": rel,
             "valid": parse_result.valid,
             "card_total": parse_result.card_count,
             "errors": _serialize(parse_result.errors),
+            "remote_resolved": remote_resolved,
+            "remote_unresolved_count": remote_unresolved_count,
+            "remote_warnings": remote_warnings,
         }
 
     # ------------------------------------------------------------------
@@ -323,73 +399,35 @@ class DeckLabService:
     # ------------------------------------------------------------------
 
     def _normalize_import_cards(self, dialect: str, text: str):
-        """Returns a list of (kind, zone, category, quantity, name, set_code,
-        collector_number) tuples, independent of adapter-specific row shape."""
+        """Returns `(documents, warnings)` where `documents` is a tuple of
+        `manabox_arena.BoardDocument` (kind/markdown/parse_result), one per
+        board kind actually present. Both dialects funnel through the
+        public `manabox_arena.to_board_markdown` renderer/validator --
+        this module never reimplements board-kind/zone/category rendering
+        grammar itself.
+        """
 
         if dialect in ("manabox", "arena"):
             result = _manabox_arena.import_text(text, dialect=dialect)
-            normalized = []
-            for card in result.cards:
-                kind = _manabox_arena._ZONE_TO_BOARD_KIND.get(card.zone)
-                if kind is None:
-                    continue
-                normalized.append(
-                    (kind, card.zone, card.category, card.quantity, card.name, card.set_code, card.collector_number)
-                )
-            return normalized, []
+            return _manabox_arena.to_board_markdown(result), []
 
         if dialect == "moxfield-bulk":
             result = _moxfield_bulk.import_text(text)
-            normalized = []
-            for card in result.cards:
-                zone = _MOXFIELD_BOARD_TO_ZONE.get(card.board, "Deck")
-                kind = _MOXFIELD_BOARD_TO_KIND.get(card.board, "mainboard")
-                category = card.category or "Uncategorized"
-                normalized.append(
-                    (kind, zone, category, card.quantity, card.name, card.set_code, card.collector_number)
+            rows = [
+                _manabox_arena.CardRow(
+                    quantity=card.quantity,
+                    name=card.name,
+                    zone=_MOXFIELD_BOARD_TO_ZONE.get(card.board, "Deck"),
+                    category=card.category or "Uncategorized",
+                    set_code=card.set_code,
+                    collector_number=card.collector_number,
                 )
-            return normalized, list(result.warnings)
+                for card in result.cards
+            ]
+            documents = _manabox_arena.to_board_markdown(_manabox_arena.ImportResult(cards=rows))
+            return documents, list(result.warnings)
 
         raise _err("UNSUPPORTED_DIALECT", f"Unsupported import dialect: {dialect!r}")
-
-    def _render_board(self, kind: str, kind_cards: list, *, board_name: str, order: int) -> str:
-        zones_in_kind = _manabox_arena._ZONES_BY_KIND[kind]
-        zones_present = [z for z in zones_in_kind if any(c[1] == z for c in kind_cards)]
-
-        lines = [
-            "---",
-            "schema: hermes-mtg/board/v1",
-            f"name: {board_name}",
-            f"kind: {kind}",
-            f"order: {order}",
-            "---",
-            "",
-            f"# {board_name}",
-            "",
-        ]
-        for zone in zones_present:
-            zone_cards = [c for c in kind_cards if c[1] == zone]
-            lines.append(f"## {zone}")
-            lines.append("")
-            categories = []
-            for c in zone_cards:
-                if c[2] not in categories:
-                    categories.append(c[2])
-            for category in categories:
-                lines.append(f"### {category}")
-                lines.append("")
-                lines.append("```decklist")
-                for c in zone_cards:
-                    if c[2] != category:
-                        continue
-                    _, _, _, qty, name, set_code, collector = c
-                    row = f"{qty} {name}"
-                    if set_code and collector:
-                        row += f" ({set_code}) {collector}"
-                    lines.append(row)
-                lines.append("```")
-                lines.append("")
-        return "\n".join(lines).rstrip() + "\n"
 
     def import_deck(
         self,
@@ -416,26 +454,17 @@ class DeckLabService:
         if len(text.encode("utf-8")) > MAX_PASTED_TEXT_BYTES:
             raise _err("TEXT_TOO_LARGE", f"Input text exceeds {MAX_PASTED_TEXT_BYTES} bytes")
 
-        normalized, warnings = self._normalize_import_cards(dialect, text)
-
-        by_kind: dict = {}
-        for row in normalized:
-            by_kind.setdefault(row[0], []).append(row)
+        documents, warnings = self._normalize_import_cards(dialect, text)
 
         self._resolve_repo_path(target_deck_path)  # path-safety only; need not exist
 
-        targets = []  # list of (rel_path, rendered_text, kind)
-        for kind in ("mainboard", "sideboard", "maybeboard"):
-            kind_cards = by_kind.get(kind)
-            if not kind_cards:
-                continue
-            if target_board_path is not None and len(by_kind) == 1:
+        targets = []  # list of (rel_path, rendered_text, kind, parse_result)
+        for document in documents:
+            if target_board_path is not None and len(documents) == 1:
                 target_rel = target_board_path
             else:
-                target_rel = f"{target_deck_path}/{kind}.md"
-            rendered = self._render_board(kind, kind_cards, board_name="Imported", order=10)
-            parse_result = _parser.parse_board(rendered, path=target_rel)
-            targets.append((target_rel, rendered, kind, parse_result))
+                target_rel = f"{target_deck_path}/{document.kind}.md"
+            targets.append((target_rel, document.markdown, document.kind, document.parse_result))
 
         if not targets:
             raise _err("INVALID_INPUT", "No recognizable cards were parsed from the provided input")
@@ -479,6 +508,17 @@ class DeckLabService:
 
         if not apply:
             return result
+
+        invalid_targets = [tr["path"] for tr in target_results if not tr["valid"]]
+        if invalid_targets:
+            raise _err(
+                "IMPORT_VALIDATION_FAILED",
+                f"Rendered import is not valid board Markdown for: {', '.join(invalid_targets)}; "
+                "apply is refused before any filesystem mutation",
+                path=invalid_targets[0],
+                status=400,
+                category="client",
+            )
 
         # --- apply path: validate every precondition before touching any file ---
         if isinstance(expected_hash, dict):
@@ -573,6 +613,7 @@ class DeckLabService:
         deck_summary = self._find_deck_summary(deck_path)
         boards = deck_summary.boards
         if board_path is not None:
+            self._resolve_repo_path(board_path)  # path-safety before semantic lookup
             boards = [b for b in boards if b.path == board_path]
             if not boards:
                 raise _err("BOARD_NOT_FOUND", f"No board at {board_path!r}", path=board_path, status=404, category="not_found")
@@ -641,7 +682,7 @@ class DeckLabService:
             }
 
         now = time.time()
-        entries = list(self._cache._data.values())
+        entries = self._cache.entries()
         fresh = sum(1 for e in entries if self._cache.is_fresh(e, now))
         return {
             "schema": SERVICE_SCHEMA_V1,
