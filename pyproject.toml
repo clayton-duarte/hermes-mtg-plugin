@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-mtg-plugin"
+version = "0.1.0"
+description = "Deck Lab: a Hermes plugin for Magic: The Gathering deck repositories"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "clayton-duarte" }]
+
+[tool.setuptools.packages.find]
+include = ["deck_lab*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
