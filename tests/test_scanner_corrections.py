@@ -42,7 +42,7 @@ def test_invalid_deck_metadata_is_returned_not_raised_with_duplicate_colors(tmp_
     assert any(e.code == "DECK_FRONTMATTER_INVALID" for e in match.errors)
 
 
-def test_invalid_deck_metadata_missing_colors_is_returned(tmp_path):
+def test_empty_color_identity_is_valid_for_colorless_deck(tmp_path):
     deck_dir = tmp_path / "decks" / "commander" / "no-colors"
     _write(
         deck_dir / "README.md",
@@ -53,11 +53,42 @@ def test_invalid_deck_metadata_missing_colors_is_returned(tmp_path):
 
     decks = scan_repository(tmp_path / "decks")
     match = next(d for d in decks if d.path == "decks/commander/no-colors")
+    assert match.valid is True
+    assert match.color_identity == ()
+    assert not any(e.code == "DECK_FRONTMATTER_INVALID" for e in match.errors)
+
+
+def test_invalid_color_identity_non_list_is_rejected(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "non-list-colors"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: NonList\nformat: commander\n"
+        "color_identity: R\nstatus: built\n---\n",
+    )
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/non-list-colors")
     assert match.valid is False
     assert any(e.code == "DECK_FRONTMATTER_INVALID" for e in match.errors)
 
 
-def test_invalid_deck_uppercase_format_or_status_is_returned(tmp_path):
+def test_mixed_case_and_spaced_status_is_accepted(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "mixed-status"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: Mixed\nformat: commander\n"
+        "color_identity: [R]\nstatus: In Progress\n---\n",
+    )
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/mixed-status")
+    assert match.status == "In Progress"
+    assert not any(e.code == "DECK_FRONTMATTER_INVALID" for e in match.errors)
+
+
+def test_invalid_deck_uppercase_format_is_rejected_status_open_vocabulary(tmp_path):
     deck_dir = tmp_path / "decks" / "commander" / "upper-case"
     _write(
         deck_dir / "README.md",
@@ -70,7 +101,8 @@ def test_invalid_deck_uppercase_format_or_status_is_returned(tmp_path):
     match = next(d for d in decks if d.path == "decks/commander/upper-case")
     assert match.valid is False
     codes = [e.code for e in match.errors]
-    assert codes.count("DECK_FRONTMATTER_INVALID") >= 2
+    assert codes.count("DECK_FRONTMATTER_INVALID") == 1
+    assert match.status == "Built"
 
 
 def test_diagnostics_carry_code_message_path_line_severity(tmp_path):
@@ -85,6 +117,44 @@ def test_diagnostics_carry_code_message_path_line_severity(tmp_path):
     assert diag.path == "decks/commander/broken"
     assert diag.severity == "error"
     assert hasattr(diag, "line")
+
+
+def test_deck_frontmatter_error_reports_readme_field_line(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "bad-status"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: X\nformat: commander\n"
+        "color_identity: [R]\nstatus: ''\n---\n",
+    )
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/bad-status")
+    diag = next(e for e in match.errors if e.code == "DECK_FRONTMATTER_INVALID")
+    assert diag.path == "decks/commander/bad-status/README.md"
+    assert diag.line == 6
+
+
+def test_invalid_board_file_diagnostic_surfaces_with_board_path(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "bad-board"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: X\nformat: commander\n"
+        "color_identity: [R]\nstatus: built\n---\n",
+    )
+    _write(
+        deck_dir / "mainboard.md",
+        "---\nschema: hermes-mtg/board/v1\nname: Mainboard\nkind: nope\norder: 10\n---\n\n## Commander\n",
+    )
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/bad-board")
+    assert match.valid is False
+    assert match.boards == ()
+    diag = next(e for e in match.errors if e.code == "BOARD_KIND_INVALID")
+    assert diag.path == "decks/commander/bad-board/mainboard.md"
+    assert diag.line == 4
+    assert not any(e.code == "BOARD_FRONTMATTER_MISSING" for e in match.errors)
 
 
 def test_invalid_board_order_boolean_is_rejected(tmp_path):

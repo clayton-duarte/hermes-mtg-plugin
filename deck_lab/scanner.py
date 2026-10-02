@@ -74,6 +74,22 @@ def _is_nonempty_str(value: object) -> bool:
     return isinstance(value, str) and value.strip() != ""
 
 
+def _frontmatter_field_line(text: str, key: str) -> Optional[int]:
+    """Best-effort 1-indexed line number of `key:` within the leading
+    frontmatter block of `text`. Returns None if not found (e.g. missing
+    frontmatter, or the field is absent)."""
+
+    if not text.startswith("---\n"):
+        return None
+    lines = text.splitlines()
+    for idx, line in enumerate(lines[1:], start=2):
+        if line.strip() == "---":
+            break
+        if line.split(":", 1)[0].strip() == key:
+            return idx
+    return None
+
+
 def _is_strict_int(value: object) -> bool:
     """True for a real int, excluding bool (bool is an int subclass)."""
 
@@ -129,24 +145,51 @@ def _board_diagnostics(path: Path, rel_path: str, frontmatter: Optional[dict]) -
     return diagnostics
 
 
-def _is_board_markdown(path: Path, rel_path: str) -> Optional[dict]:
-    """Return the frontmatter dict if `path` is recognized as strict board
-    schema markdown, else None. Reads only the file's frontmatter region by
-    parsing the whole file but never touches the decklist parser -- no card
-    rows are parsed here."""
+def _is_board_markdown(path: Path, rel_path: str) -> tuple[Optional[dict], list[ValidationError]]:
+    """Return (frontmatter, diagnostics) for a board markdown candidate.
+    frontmatter is the parsed dict only when valid (diagnostics empty);
+    on any validation failure frontmatter is None and diagnostics holds the
+    board file's own structured errors (path/line of the board file itself)."""
 
     try:
         text = path.read_text()
     except OSError:
-        return None
+        return None, [
+            ValidationError(
+                code="BOARD_FRONTMATTER_MISSING",
+                message="Board markdown could not be read.",
+                path=rel_path,
+            )
+        ]
     frontmatter, _ = _split_frontmatter(text)
-    if _board_diagnostics(path, rel_path, frontmatter):
-        return None
-    return frontmatter
+    diagnostics = _board_diagnostics(path, rel_path, frontmatter)
+    if diagnostics:
+        diagnostics = [
+            ValidationError(
+                code=d.code,
+                message=d.message,
+                path=d.path,
+                severity=d.severity,
+                line=_frontmatter_field_line(
+                    text,
+                    {
+                        "BOARD_SCHEMA_UNSUPPORTED": "schema",
+                        "BOARD_KIND_INVALID": "kind",
+                    }.get(d.code, "name" if "name" in d.message else "order"),
+                ),
+                context=d.context,
+            )
+            for d in diagnostics
+        ]
+        return None, diagnostics
+    return frontmatter, []
 
 
 def _deck_frontmatter_diagnostics(
-    rel_path: str, frontmatter: Optional[dict]
+    rel_path: str,
+    frontmatter: Optional[dict],
+    raw_text: str = "",
+    field_path: Optional[str] = None,
 ) -> tuple[list[ValidationError], dict]:
     """Validate deck frontmatter. Returns (diagnostics, sanitized_fields) where
     sanitized_fields always holds values safe to pass into DeckSummary (never
@@ -184,6 +227,7 @@ def _deck_frontmatter_diagnostics(
         )
 
     diagnostics: list[ValidationError] = []
+    err_path = field_path or rel_path
 
     name = frontmatter.get("name")
     if _is_nonempty_str(name):
@@ -193,7 +237,8 @@ def _deck_frontmatter_diagnostics(
             ValidationError(
                 code="DECK_FRONTMATTER_INVALID",
                 message="Deck frontmatter 'name' must be a non-empty string.",
-                path=rel_path,
+                path=err_path,
+                line=_frontmatter_field_line(raw_text, "name"),
             )
         )
 
@@ -205,29 +250,32 @@ def _deck_frontmatter_diagnostics(
             ValidationError(
                 code="DECK_FRONTMATTER_INVALID",
                 message="Deck frontmatter 'format' must be a non-empty lowercase string.",
-                path=rel_path,
+                path=err_path,
+                line=_frontmatter_field_line(raw_text, "format"),
             )
         )
 
     status = frontmatter.get("status")
-    if _is_nonempty_str(status) and status == status.lower():  # type: ignore[union-attr]
+    if _is_nonempty_str(status):
         sanitized["status"] = status
     else:
         diagnostics.append(
             ValidationError(
                 code="DECK_FRONTMATTER_INVALID",
-                message="Deck frontmatter 'status' must be a non-empty lowercase string.",
-                path=rel_path,
+                message="Deck frontmatter 'status' must be a non-empty string.",
+                path=err_path,
+                line=_frontmatter_field_line(raw_text, "status"),
             )
         )
 
     color_identity = frontmatter.get("color_identity")
-    if not isinstance(color_identity, list) or not color_identity:
+    if not isinstance(color_identity, list):
         diagnostics.append(
             ValidationError(
                 code="DECK_FRONTMATTER_INVALID",
-                message="Deck frontmatter 'color_identity' must be a non-empty list.",
-                path=rel_path,
+                message="Deck frontmatter 'color_identity' must be a list.",
+                path=err_path,
+                line=_frontmatter_field_line(raw_text, "color_identity"),
             )
         )
     elif any(c not in COLOR_IDENTITY_VALUES for c in color_identity):
@@ -235,7 +283,8 @@ def _deck_frontmatter_diagnostics(
             ValidationError(
                 code="DECK_FRONTMATTER_INVALID",
                 message=f"Deck 'color_identity' members must be one of {sorted(COLOR_IDENTITY_VALUES)!r}.",
-                path=rel_path,
+                path=err_path,
+                line=_frontmatter_field_line(raw_text, "color_identity"),
             )
         )
     elif len(set(color_identity)) != len(color_identity):
@@ -243,7 +292,8 @@ def _deck_frontmatter_diagnostics(
             ValidationError(
                 code="DECK_FRONTMATTER_INVALID",
                 message="Deck 'color_identity' must not contain duplicate colors.",
-                path=rel_path,
+                path=err_path,
+                line=_frontmatter_field_line(raw_text, "color_identity"),
             )
         )
     else:
@@ -290,15 +340,19 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
                 continue
 
             rel_path = f"decks/{deck_resolved.relative_to(root_resolved).as_posix()}"
+            readme_rel_path = f"{rel_path}/{README_NAME}"
 
             try:
                 readme_text = readme_resolved.read_text()
             except OSError:
                 readme_text = ""
             deck_frontmatter, _ = _split_frontmatter(readme_text)
-            deck_diagnostics, sanitized = _deck_frontmatter_diagnostics(rel_path, deck_frontmatter)
+            deck_diagnostics, sanitized = _deck_frontmatter_diagnostics(
+                rel_path, deck_frontmatter, readme_text, readme_rel_path
+            )
 
             boards: list[BoardSummary] = []
+            board_file_errors: list[ValidationError] = []
             for candidate in sorted(deck_resolved.glob("*.md")):
                 if candidate.name == README_NAME:
                     continue
@@ -306,8 +360,9 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
                 if candidate_resolved is None:
                     continue
                 board_rel = f"decks/{candidate_resolved.relative_to(root_resolved).as_posix()}"
-                board_fm = _is_board_markdown(candidate_resolved, board_rel)
+                board_fm, board_diag = _is_board_markdown(candidate_resolved, board_rel)
                 if board_fm is None:
+                    board_file_errors.extend(board_diag)
                     continue
                 boards.append(
                     BoardSummary(
@@ -321,13 +376,16 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
 
             deck_diagnostics_all = list(deck_diagnostics)
             if not boards:
-                deck_diagnostics_all.append(
-                    ValidationError(
-                        code="BOARD_FRONTMATTER_MISSING",
-                        message="Deck has no recognizable board markdown.",
-                        path=rel_path,
+                if board_file_errors:
+                    deck_diagnostics_all.extend(board_file_errors)
+                else:
+                    deck_diagnostics_all.append(
+                        ValidationError(
+                            code="BOARD_FRONTMATTER_MISSING",
+                            message="Deck has no recognizable board markdown.",
+                            path=rel_path,
+                        )
                     )
-                )
 
             valid = not deck_diagnostics_all
 
