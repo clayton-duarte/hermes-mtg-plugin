@@ -28,6 +28,15 @@ const CDP_HOST = process.env.DECK_LAB_CDP_HOST ?? '127.0.0.1'
 const CDP_PORT = Number(process.env.DECK_LAB_CDP_PORT ?? 9333)
 const EXACT_JOINED_RESEARCHERS_URL = 'https://scryfall.com/card/sos/23/joined-researchers-secret-rendezvous?utm_source=api'
 
+// Mutation control for the trusted-row-input assertion (required by the
+// card): when set, the row-background click/tap step uses the synthetic
+// (non-trusted) dispatchEvent path instead of real CDP Input, so the named
+// `trusted_row_input_pins_via_card_row_onclick` check must observe
+// isTrusted:false and fail -- proving the check actually discriminates real
+// pointer input from a bare event dispatch, not merely that pin state
+// flipped (which a synthetic dispatch can also produce).
+const USE_SYNTHETIC_ROW_CLICK = process.env.DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK === '1'
+
 const results = {}
 let failures = 0
 
@@ -164,17 +173,42 @@ async function main() {
   // 3b. Row background click/tap (CardRow.onClick / onRowActivate) also
   //     pins/unpins directly, without going through the dedicated pin icon
   //     button -- restores coverage of the row-level click/tap pin path per
-  //     architect correction.
-  await d.clickRowBackground(rowSelector('Sol Ring'))
+  //     architect correction. Arms a native capture-phase click listener on
+  //     the row group BEFORE the click so the received event's isTrusted
+  //     and closest-group identity can be asserted -- not merely that the
+  //     DOM pin state flipped, which a synthetic dispatchEvent can also
+  //     produce.
+  const armRowClickCapture = async name => {
+    await d.evalJs(`
+      (() => {
+        const row = ${rowSelector(name)}
+        if (!row) return false
+        window.__rowClickCapture = null
+        const handler = event => {
+          window.__rowClickCapture = { isTrusted: event.isTrusted, closestGroup: event.currentTarget.getAttribute('aria-label') }
+        }
+        row.addEventListener('click', handler, { capture: true, once: true })
+        return true
+      })()
+    `)
+  }
+  await armRowClickCapture('Sol Ring')
+  const rowClickFn = USE_SYNTHETIC_ROW_CLICK ? d.clickRowBackgroundSynthetic : d.clickRowBackground
+  await rowClickFn(rowSelector('Sol Ring'))
   await d.sleep(400)
+  const rowClickCaptureAfterFirst = await d.evalJs(`window.__rowClickCapture`)
   const pinnedAfterRowBackgroundClick = await previewPinned()
   const titlePinnedViaRowBackground = await previewTitle()
-  await d.clickRowBackground(rowSelector('Sol Ring'))
+  await armRowClickCapture('Sol Ring')
+  await rowClickFn(rowSelector('Sol Ring'))
   await d.sleep(400)
   const unpinnedAfterSecondRowBackgroundClick = await previewPinned()
   check('row_background_click_pins_and_unpins', pinnedAfterRowBackgroundClick === true && titlePinnedViaRowBackground === 'Sol Ring' && unpinnedAfterSecondRowBackgroundClick === false, {
     pinnedAfterRowBackgroundClick, titlePinnedViaRowBackground, unpinnedAfterSecondRowBackgroundClick
   })
+  check('trusted_row_input_pins_via_card_row_onclick',
+    rowClickCaptureAfterFirst?.isTrusted === true && rowClickCaptureAfterFirst?.closestGroup === 'Sol Ring' && pinnedAfterRowBackgroundClick === true,
+    { rowClickCaptureAfterFirst, pinnedAfterRowBackgroundClick })
 
   // 4. Hovering another card while pinned does not replace preview.
   await d.clickElement(pinButtonSelector('Sol Ring'))
@@ -284,19 +318,30 @@ async function main() {
 
   // 9. Image remount / no stale art: switching from a cached-art card
   //    (Sol Ring) to another cached-art card (Joined Researchers) must not
-  //    show Sol Ring's <img src> while the new title is already showing, AND
-  //    the <img> must be visibly hidden (ImageWithLoadingGuard's `hidden`
-  //    class) immediately after switching, until it either becomes visible
-  //    with its own (new) src, or the card enters an explicit loading/error
-  //    state -- never silently stuck hidden with no status shown.
+  //    show Sol Ring's <img src> while the new title is already showing.
+  //    Deterministic (no race-tuned sleep): assert IMMEDIATELY after the
+  //    switch that either the <img> is hidden, or it is visible AND its own
+  //    `data-loaded-src` (the src whose onLoad actually completed) equals
+  //    the new src -- never assume a hidden image implies staleness when
+  //    the new art was already cached and loaded synchronously.
   await d.hoverElement(rowSelector('Sol Ring'))
   await d.sleep(400)
   const solRingSrc = await d.evalJs(`document.querySelector('img')?.src ?? null`)
   await d.hoverElement(rowSelector('Joined Researchers // Secret Rendezvous'))
-  await d.sleep(50) // sample immediately after the title has already updated, before the new image finishes loading
-  const titleImmediatelyAfterSwitch = await previewTitle()
-  const imgSrcImmediatelyAfterSwitch = await d.evalJs(`document.querySelector('img')?.src ?? null`)
-  const imgHiddenImmediatelyAfterSwitch = await d.evalJs(`document.querySelector('img')?.classList?.contains('hidden') ?? null`)
+  const immediatelyAfterSwitch = await d.evalJs(`
+    (() => {
+      const img = document.querySelector('img')
+      return {
+        title: document.querySelector('.text-\\\\[0\\\\.8rem\\\\]')?.textContent ?? null,
+        src: img?.src ?? null,
+        hidden: img?.classList?.contains('hidden') ?? null,
+        loadedSrc: img?.getAttribute('data-loaded-src') ?? null
+      }
+    })()
+  `)
+  const { title: titleImmediatelyAfterSwitch, src: imgSrcImmediatelyAfterSwitch, hidden: imgHiddenImmediatelyAfterSwitch, loadedSrc: loadedSrcImmediatelyAfterSwitch } = immediatelyAfterSwitch
+  const imageGenuinelyNotStale = imgHiddenImmediatelyAfterSwitch === true ||
+    (imgHiddenImmediatelyAfterSwitch === false && loadedSrcImmediatelyAfterSwitch === imgSrcImmediatelyAfterSwitch)
   await d.sleep(600) // give the real <img> a chance to finish loading
   const imgVisibleEventually = await d.evalJs(`document.querySelector('img')?.classList?.contains('hidden') === false`)
   const imgSrcEventually = await d.evalJs(`document.querySelector('img')?.src ?? null`)
@@ -307,8 +352,8 @@ async function main() {
       return { hidden, loadingShown }
     })()
   `)
-  check('no_stale_image_under_new_title', titleImmediatelyAfterSwitch === 'Joined Researchers' && imgSrcImmediatelyAfterSwitch !== solRingSrc && imgHiddenImmediatelyAfterSwitch === true, {
-    solRingSrc, titleImmediatelyAfterSwitch, imgSrcImmediatelyAfterSwitch, imgHiddenImmediatelyAfterSwitch
+  check('no_stale_image_under_new_title', titleImmediatelyAfterSwitch === 'Joined Researchers' && imgSrcImmediatelyAfterSwitch !== solRingSrc && imageGenuinelyNotStale, {
+    solRingSrc, titleImmediatelyAfterSwitch, imgSrcImmediatelyAfterSwitch, imgHiddenImmediatelyAfterSwitch, loadedSrcImmediatelyAfterSwitch, imageGenuinelyNotStale
   })
   check('new_image_eventually_visible_or_explicit_status', (imgVisibleEventually === true && imgSrcEventually === imgSrcImmediatelyAfterSwitch) || statusAfterSettle.loadingShown === true, {
     imgVisibleEventually, imgSrcEventually, statusAfterSettle

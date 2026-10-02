@@ -127,25 +127,65 @@ export async function connect(wsUrl) {
     return box
   }
 
-  // Clicks somewhere inside the row-group element matched by `selectorExpr`
-  // that is NOT its own name <button> or a `[role=separator]` resize handle
-  // overlapping the row's left edge -- both of which the row's geometric
-  // center/left edge can land on depending on the live pane's current
-  // width. Scans a few candidate x-offsets via elementFromPoint and uses
-  // the first one that resolves to the row itself or a non-interactive
-  // descendant (not BUTTON, not `[role=separator]`), so the click reaches
-  // the row's own onClick (pin toggle) instead of stopPropagation'd or
-  // unrelated UI.
-  // Clicks the row-group element's OWN node directly (not its descendant
-  // name/pin <button>s) by dispatching real bubbling MouseEvents at the
-  // element itself -- not a coordinate-based elementFromPoint click, which
-  // proved unreliable in this dev harness (the chat-composer surface
-  // sometimes hit-tests above the deck-lab pane's painted pixels due to the
-  // app's own CSS zoom). React's root-delegated listeners still fire
-  // correctly for a bubbling event dispatched on the row node, so this
-  // genuinely exercises the row's own onClick (CardRow.onRowActivate /
-  // onPinToggle), not the pin-icon button and not the name button.
+  // Clicks the row-group element's own quantity `<span>` (its first child,
+  // a non-interactive node that is never a <button> and never the
+  // `[role=separator]` resize handle) via real CDP
+  // Input.dispatchMouseEvent -- an actual OS-level pointer press/release at
+  // on-screen coordinates, not a synthetic dispatchEvent. This genuinely
+  // exercises the row's own onClick (CardRow.onRowActivate / onPinToggle),
+  // because the click lands within the row's bounding box but outside the
+  // name/pin <button>s, and React's delegated root listener observes a
+  // trusted click the same way it would for a real user. Coordinates come
+  // from the unscaled getBoundingClientRect() center of the quantity span
+  // (not DOM.getBoxModel, and not scaled by outerWidth/innerWidth), matching
+  // the deterministic route proven live for this harness.
   async function clickRowBackground(rowSelectorExpr) {
+    // The row itself (the `[role=group]` flex container) only paints as a
+    // hit-testable surface in the narrow flex `gap` between its children
+    // (it has no padding box of its own outside their bounds, and a
+    // column-resize `[role=separator]` overlay from an adjacent column can
+    // cover area to its left). Probe every point along the row's own
+    // bounding box and use the first that hit-tests back to the row
+    // element itself -- never a descendant button/span or an unrelated
+    // overlapping element -- so the click unambiguously reaches the row's
+    // own onClick (not a coordinate guess).
+    const groupCheck = await evalJs(`
+      (() => {
+        const row = ${rowSelectorExpr}
+        if (!row) return { ok: false, reason: 'row not found' }
+        if (row.getAttribute('role') !== 'group') return { ok: false, reason: 'selector did not resolve to a [role=group] row' }
+        return { ok: true }
+      })()
+    `)
+    if (!groupCheck?.ok) throw new Error(`clickRowBackground: ${groupCheck?.reason ?? 'unknown failure'} for ${rowSelectorExpr}`)
+    await evalJs(`
+      (() => {
+        const row = ${rowSelectorExpr}
+        row.scrollIntoView({ block: 'center', inline: 'nearest' })
+      })()
+    `)
+    await sleep(200)
+    const rect = await evalJs(`
+      (() => {
+        const row = ${rowSelectorExpr}
+        const r = row.getBoundingClientRect()
+        const y = r.y + r.height / 2
+        for (let x = r.x + 1; x < r.x + r.width; x += 1) {
+          if (document.elementFromPoint(x, y) === row) return { x, y, width: r.width, height: r.height }
+        }
+        return null
+      })()
+    `)
+    if (!rect) throw new Error(`clickRowBackground: no point along ${rowSelectorExpr}'s own bounding box hit-tests to the row itself (always resolves to a descendant or overlapping element)`)
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: rect.x, y: rect.y, button: 'left', clickCount: 1 })
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: rect.x, y: rect.y, button: 'left', clickCount: 1 })
+    return { dispatched: true, box: rect }
+  }
+
+  // Synthetic (non-trusted) variant used ONLY by the mutation control for
+  // the trusted-row-input assertion -- proves the named check actually
+  // discriminates real CDP input from a bare dispatchEvent.
+  async function clickRowBackgroundSynthetic(rowSelectorExpr) {
     await evalJs(`
       (() => {
         const el = ${rowSelectorExpr}
@@ -164,7 +204,7 @@ export async function connect(wsUrl) {
         return true
       })()
     `)
-    if (!dispatched) throw new Error(`clickRowBackground: row not found for ${rowSelectorExpr}`)
+    if (!dispatched) throw new Error(`clickRowBackgroundSynthetic: row not found for ${rowSelectorExpr}`)
     return { dispatched: true }
   }
 
@@ -178,5 +218,5 @@ export async function connect(wsUrl) {
     }
   }
 
-  return { send, on, sleep, evalJs, boxModelFor, hoverElement, clickElement, clickRowBackground, pressTab, raw: ws }
+  return { send, on, sleep, evalJs, boxModelFor, hoverElement, clickElement, clickRowBackground, clickRowBackgroundSynthetic, pressTab, raw: ws }
 }

@@ -927,6 +927,13 @@ function ImageWithLoadingGuard({ alt, src }) {
         alt,
         className: cn('w-full rounded', loadedSrc !== src && 'hidden'),
         src,
+        // Exposes the src whose onLoad actually completed, so a live proof
+        // harness can assert deterministically (no race-tuned sleep)
+        // whether the currently-rendered bitmap genuinely belongs to the
+        // current `src` -- instead of assuming any hidden image is
+        // necessarily stale and any post-switch sleep window is long
+        // enough for a real network fetch.
+        'data-loaded-src': loadedSrc ?? '',
         onLoad: () => setLoadedSrc(src)
       })
     ]
