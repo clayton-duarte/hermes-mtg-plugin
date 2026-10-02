@@ -64,7 +64,6 @@ class Card:
     category: str = UNCATEGORIZED
     set_code: Optional[str] = None
     collector_number: Optional[str] = None
-    finish: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -139,13 +138,11 @@ def import_text(text: str) -> ImportResult:
                 )
             body = _CATEGORY_RE.sub("", body).strip()
 
-        finish = None
         for marker_match in list(_FINISH_MARKER_RE.finditer(body)):
             marker = marker_match.group(1)
             if marker.upper() == _COMMANDER_MARKER:
                 row_board = "commander"
             elif marker.upper() in _FINISH_TOKENS:
-                finish = marker
                 warnings.append(f"dropped provider-only finish marker *{marker}* on {body!r}")
             else:
                 warnings.append(
@@ -164,7 +161,6 @@ def import_text(text: str) -> ImportResult:
                 category=category,
                 set_code=set_code,
                 collector_number=collector_number,
-                finish=finish,
             )
         )
 

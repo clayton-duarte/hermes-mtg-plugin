@@ -195,8 +195,18 @@ def test_language_marker_is_not_stored_as_canonical_finish():
     result = import_text(text)
     bolt = result.cards[0]
     assert bolt.name == "Lightning Bolt"
-    assert bolt.finish is None
+    assert not hasattr(bolt, "finish")
     assert any("*Japanese*" in w and "language" in w.lower() for w in result.warnings)
+
+
+@pytest.mark.parametrize("marker", ["F", "Foil", "E", "Etched", "Foil-Etched"])
+def test_finish_markers_yield_no_canonical_finish_value(marker):
+    text = f"1 Arcane Signet *{marker}*\n"
+    result = import_text(text)
+    card = result.cards[0]
+    assert card.name == "Arcane Signet"
+    assert not hasattr(card, "finish")
+    assert any(f"*{marker}*" in w for w in result.warnings)
 
 
 def test_no_network_imports_in_adapter_module():
