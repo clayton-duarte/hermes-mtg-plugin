@@ -657,6 +657,39 @@ function flattenCategories(categories, depth = 0, rows = []) {
   return rows
 }
 
+/** Rebuild the nested { name, path, cards, subcategories } category tree the
+ *  pane renders from a flat `/deck` `cards` list, where each card instead
+ *  carries its own `category_path` tuple (possibly empty for an
+ *  uncategorized card). Nodes are created on demand in first-seen order so
+ *  render order matches the order categories first appear in the board. */
+function buildCategoryTree(cards) {
+  const root = []
+  const nodeByPath = new Map() // joined path -> node, for O(1) lookup while walking
+
+  for (const card of cards) {
+    const path = card.category_path ?? []
+    if (path.length === 0) continue // uncategorized cards render separately, not as a category row
+
+    let siblings = root
+    let builtPath = []
+    let node = null
+    for (const segment of path) {
+      builtPath = [...builtPath, segment]
+      const key = builtPath.join('\u0000')
+      node = nodeByPath.get(key)
+      if (!node) {
+        node = { name: segment, path: [...builtPath], cards: [], subcategories: [] }
+        nodeByPath.set(key, node)
+        siblings.push(node)
+      }
+      siblings = node.subcategories
+    }
+    node.cards.push(card)
+  }
+
+  return root
+}
+
 /** Group decks by format, each group itself split by status -- the picker's
  *  two-level grouping (\"Required behavior: Searchable picker grouped by
  *  format/status\"). */
@@ -852,8 +885,12 @@ function CategoryBlock({ ctx, onHoverPreview, onPinToggle, pinnedName, row }) {
   })
 }
 
-/** Decklist column: board tabs + one main scroller over nested categories. */
-function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, onPinToggle, pinnedName }) {
+/** Decklist column: board tabs + one main scroller over nested categories.
+ *  `deck.boards` is the thin `BoardSummary` list (for the tab strip only);
+ *  the nested category/card tree for the ACTIVE tab comes from `activeBoard`
+ *  (the live `/deck` response for the currently selected board), since a
+ *  `BoardSummary` never carries `categories` itself. */
+function DecklistColumn({ activeBoard, boardIndex, ctx, deck, loadingBoard, onBoardChange, onHoverPreview, onPinToggle, pinnedName }) {
   if (!deck) {
     return jsx('div', {
       className: 'flex h-full items-center justify-center p-4 text-center text-[0.75rem] text-(--ui-text-quaternary)',
@@ -880,8 +917,7 @@ function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, 
     })
   }
 
-  const board = deck.boards[boardIndex] ?? deck.boards[0]
-  const rows = flattenCategories(board.categories)
+  const rows = activeBoard ? flattenCategories(activeBoard.categories) : []
 
   return jsxs('div', {
     className: 'flex min-h-0 flex-1 flex-col',
@@ -898,9 +934,11 @@ function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, 
       jsx(ScrollArea, {
         className: 'min-h-0 flex-1',
         children:
-          rows.length === 0
-            ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', children: 'This board is empty.' })
-            : jsx('div', { className: 'flex flex-col pb-2', children: rows.map(row => jsx(CategoryBlock, { key: row.path.join('/'), ctx, row, onHoverPreview, onPinToggle, pinnedName })) })
+          loadingBoard
+            ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', children: 'Loading…' })
+            : rows.length === 0
+              ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', children: 'This board is empty.' })
+              : jsx('div', { className: 'flex flex-col pb-2', children: rows.map(row => jsx(CategoryBlock, { key: row.path.join('/'), ctx, row, onHoverPreview, onPinToggle, pinnedName })) })
       })
     ]
   })
@@ -1009,53 +1047,102 @@ function PreviewColumn({ card, onFaceToggle, pinned, faceIndex }) {
  *  preview column -- exactly two equal plugin columns (PANE_COLUMN_COUNT). */
 function DeckLabPane({ ctx }) {
   const qc = useQueryClient()
-  const storageKey = `${ID}:selected-deck:${FIXTURE.repository_id}`
+
+  // Live repository data (card t_f0bff516). The focused Hermes project is
+  // `host.state.cwd`; the backend is a single long-lived process with no
+  // per-request project of its own, so every route call explicitly passes
+  // `workspace_root` -- never relies on the server process's own cwd.
+  const cwd = useValue(host.state.cwd)
+  const workspaceRoot = cwd ?? ''
+  const restQuery = path => `${path}?workspace_root=${encodeURIComponent(workspaceRoot)}`
+
+  const storageKey = `${ID}:selected-deck:${workspaceRoot}`
 
   // Persisted selection per repository (ctx.storage mirrors localStorage
   // semantics for a plugin; falls back to the first deck on first run).
-  const [selectedPath, setSelectedPath] = useState(() => ctx?.storage?.get?.(storageKey) ?? FIXTURE.decks[0]?.path ?? null)
+  const [selectedPath, setSelectedPath] = useState(() => ctx?.storage?.get?.(storageKey) ?? null)
   const [boardIndex, setBoardIndex] = useState(0)
   const [query, setQuery] = useState('')
   const [hoveredCard, setHoveredCard] = useState(null)
   const [pinnedCard, setPinnedCard] = useState(null)
   const [faceIndex, setFaceIndex] = useState(0)
 
-  // Live repository data (card t_f0bff516): a cheap ~2s revision poll stays
-  // authoritative so an out-of-band edit (chat/file tooling, another
-  // window) always converges without a plugin reload. cwd change and any
-  // plugin mutation tool additionally trigger an immediate refetch on top
-  // of the poll -- see the cwd effect and invalidateQueries calls below.
-  const cwd = useValue(host.state.cwd)
-  const { data } = useQuery({
-    queryKey: [ID, 'decks', cwd],
-    queryFn: () => ctx.rest('/decks'),
-    refetchInterval: 2000, // DECKS_POLL_MS -- cheap revision poll cadence (card t_f0bff516)
-    placeholderData: FIXTURE
+  // A cheap ~2s `/revision` poll stays authoritative so an out-of-band edit
+  // (chat/file tooling, another window) always converges without a plugin
+  // reload: polling drives invalidation of the list/detail queries below
+  // instead of each of them polling the full scan/parse route directly.
+  const { data: revisionData } = useQuery({
+    queryKey: [ID, 'revision', workspaceRoot],
+    queryFn: () => ctx.rest(restQuery('/revision')),
+    refetchInterval: 2000, // REVISION_POLL_MS -- cheap revision poll cadence (card t_f0bff516)
+    enabled: Boolean(workspaceRoot)
   })
+  const revision = revisionData?.revision ?? null
 
-  // Immediate refetch on focused-project change: queryKey already includes
-  // cwd (so a project switch gets its own cache entry instead of showing
-  // stale data under the wrong key), and this explicitly kicks the refetch
-  // rather than waiting for the next poll tick.
+  // Immediate refetch on focused-project change: a cwd switch gets its own
+  // cache entry (queryKey includes workspaceRoot) instead of showing stale
+  // data under the wrong key, and this explicitly kicks the refetch rather
+  // than waiting for the next poll tick.
   useEffect(() => {
     qc.invalidateQueries({ queryKey: [ID, 'decks'] })
+    qc.invalidateQueries({ queryKey: [ID, 'deck'] })
   }, [cwd])
+
+  // Revision-driven refresh: whenever the cheap poll observes a new
+  // revision fingerprint, refetch the (comparatively expensive) list and
+  // selected-board detail queries -- the poll itself never re-scans.
+  useEffect(() => {
+    if (revision === null) return
+    qc.invalidateQueries({ queryKey: [ID, 'decks', workspaceRoot] })
+    qc.invalidateQueries({ queryKey: [ID, 'deck', workspaceRoot] })
+  }, [revision, workspaceRoot])
 
   // Immediate refetch after any Deck Lab mutation tool (agent-side
   // deck_import applying a write): tracked via ctx.onEvent, so it is
   // removed automatically on unload/reload/disable -- no leaked listener.
+  // The revision poll is the authoritative fallback if this event is ever
+  // missed/dropped -- see the revision effect above.
   useEffect(
     () =>
       ctx.onEvent('tool.complete', event => {
         if (event?.payload?.name === 'deck_import') {
           qc.invalidateQueries({ queryKey: [ID, 'decks'] })
+          qc.invalidateQueries({ queryKey: [ID, 'deck'] })
         }
       }),
     [ctx]
   )
 
-  const decks = data?.decks ?? []
-  const selectedDeck = decks.find(d => d.path === selectedPath) ?? null
+  const { data: decksData } = useQuery({
+    queryKey: [ID, 'decks', workspaceRoot],
+    queryFn: () => ctx.rest(restQuery('/decks')),
+    enabled: Boolean(workspaceRoot)
+  })
+  const decks = decksData?.decks ?? []
+  const selectedSummary = decks.find(d => d.path === selectedPath) ?? null
+
+  // List rows are `DeckSummary` only (no `cards`/`categories`); the real
+  // decklist body lives behind `/deck` and is fetched separately for just
+  // the selected deck/board, keyed on both so switching boards or decks
+  // gets its own cache entry.
+  const { data: deckDetail } = useQuery({
+    queryKey: [ID, 'deck', workspaceRoot, selectedPath, boardIndex],
+    queryFn: () => {
+      const boardPath = selectedSummary?.boards?.[boardIndex]?.path
+      const base = `/deck?path=${encodeURIComponent(selectedPath)}`
+      const withBoard = boardPath ? `${base}&board_path=${encodeURIComponent(boardPath)}` : base
+      return ctx.rest(restQuery(withBoard))
+    },
+    enabled: Boolean(workspaceRoot) && Boolean(selectedPath) && Boolean(selectedSummary)
+  })
+
+  // `/deck` returns a flat `cards` list (each with `category_path`), not a
+  // nested tree -- unlike the retired static FIXTURE's board.categories.
+  // Rebuild the nested { name, path, cards, subcategories } shape
+  // DecklistColumn/flattenCategories already expect, client-side.
+  const activeBoard = deckDetail?.board ? { ...deckDetail.board, categories: buildCategoryTree(deckDetail.cards ?? []) } : null
+  const loadingBoard = Boolean(selectedPath) && Boolean(selectedSummary) && deckDetail === undefined
+  const selectedDeck = selectedSummary ? { ...selectedSummary, boards: selectedSummary.boards } : null
 
   const selectDeck = path => {
     setSelectedPath(path)
@@ -1088,9 +1175,11 @@ function DeckLabPane({ ctx }) {
         children: [
           jsx('div', { className: 'shrink-0 p-2', children: jsx(DeckPicker, { decks, query, setQuery, selectedPath, onSelect: selectDeck }) }),
           jsx(DecklistColumn, {
+            activeBoard,
             deck: selectedDeck,
             boardIndex,
             ctx,
+            loadingBoard,
             onBoardChange: setBoardIndex,
             onHoverPreview,
             onPinToggle,
