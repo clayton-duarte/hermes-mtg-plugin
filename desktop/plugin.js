@@ -41,7 +41,7 @@
 
 import { Badge, Button, cn, host, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient, useValue } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useMemo, useState, Fragment } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 const ID = 'deck-lab'
 
@@ -1262,7 +1262,8 @@ function DeckLabPane({ ctx }) {
       children: 'No decks found in this repository.'
     })
   } else {
-    leftColumnBody = jsxs(Fragment, {
+    leftColumnBody = jsxs('div', {
+      className: 'contents',
       children: [
         jsx('div', { className: 'shrink-0 p-2', children: jsx(DeckPicker, { decks, query, setQuery, selectedPath, onSelect: selectDeck }) }),
         jsx(DecklistColumn, {

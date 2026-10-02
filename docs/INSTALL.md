@@ -12,7 +12,7 @@ disposable `HERMES_HOME` so nothing here can touch your real config,
 sessions, or other plugins:
 
 ```
-export HERMES_HOME=/tmp/hermes_scratch_home   # throwaway, not your real ~/.hermes
+export HERMES_HOME="$HOME/.cache/hermes-mtg-plugin-verify"  # throwaway
 hermes plugins validate . --json --install-deps
 ```
 
@@ -24,18 +24,22 @@ inside `validate` can actually import them instead of failing with
 
 ### Independent enable gates
 
-The backend (tools + dashboard API routes) and the desktop pane are
-separate enable surfaces:
+For a normal install, install the Git repository and enable its backend:
 
 ```
-hermes plugins enable hermes-mtg-plugin          # backend: tools + dashboard routes
+HERMES_HOME="$HERMES_HOME" hermes plugins install \
+  https://github.com/clayton-duarte/hermes-mtg-plugin.git --enable
 ```
 
+The backend (tools + dashboard API routes) and desktop pane are separate
+runtime surfaces. For local development from this checkout, link each surface
+explicitly:
+
 ```
-# Desktop half: either symlink for live dev-sync (hot-reloads on save)...
+mkdir -p "$HERMES_HOME/plugins" "$HERMES_HOME/desktop-plugins/deck-lab"
+ln -s "$(pwd)" "$HERMES_HOME/plugins/hermes-mtg-plugin"
 ln -s "$(pwd)/desktop/plugin.js" "$HERMES_HOME/desktop-plugins/deck-lab/plugin.js"
-# ...or let `hermes plugins install .` copy the desktop/ half in for a
-# non-dev, static install.
+HERMES_HOME="$HERMES_HOME" hermes plugins enable hermes-mtg-plugin
 ```
 
 A profile can run the backend half without the desktop half (e.g. a
@@ -48,7 +52,8 @@ Backend route and tool registration load at gateway start; a running
 gateway does not pick up a newly-enabled backend plugin until restarted:
 
 ```
-hermes serve --home "$HERMES_HOME" --restart   # or stop/start your gateway process
+HERMES_HOME="$HERMES_HOME" hermes serve --stop
+HERMES_HOME="$HERMES_HOME" hermes serve --isolated
 ```
 
 The desktop half does not need a gateway restart — the Electron app itself
@@ -62,10 +67,13 @@ five tools and the dashboard routes actually registered (not just that the
 manifest declares them):
 
 ```
-hermes plugins list --home "$HERMES_HOME" --json   # tools: deck_list, deck_get,
-                                                     # deck_validate, deck_import,
-                                                     # deck_export all present
+HERMES_HOME="$HERMES_HOME" hermes plugins list --enabled --json
 ```
+
+The enabled inventory must contain `hermes-mtg-plugin`. Then exercise tool
+registration through Hermes (or run `tests/test_plugin_loader_seam.py` from
+this checkout) and require exactly `deck_list`, `deck_get`, `deck_validate`,
+`deck_import`, and `deck_export`.
 
 ### Live pane data
 
