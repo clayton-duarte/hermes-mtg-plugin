@@ -1,0 +1,13 @@
+{
+  "name": "deck-lab",
+  "label": "Deck Lab",
+  "description": "Deck Lab: MTG deck repository scanning, validation, import/export API routes.",
+  "icon": "Layers",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/deck-lab",
+    "hidden": true
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}
