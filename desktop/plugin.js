@@ -39,7 +39,7 @@
  * deck_lab/ui/pane_contract.py locks that count at 2.
  */
 
-import { Badge, Button, cn, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient } from '@hermes/plugin-sdk'
+import { Badge, Button, cn, host, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient, useValue } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -1020,15 +1020,39 @@ function DeckLabPane({ ctx }) {
   const [pinnedCard, setPinnedCard] = useState(null)
   const [faceIndex, setFaceIndex] = useState(0)
 
-  // Fixture is static, but routed through useQuery so the pane's data-fetch
-  // shape matches what the live integration lane (t_f0bff516) will replace
-  // this with -- a real ctx.rest('/decks') call -- without restructuring the
-  // render tree.
+  // Live repository data (card t_f0bff516): a cheap ~2s revision poll stays
+  // authoritative so an out-of-band edit (chat/file tooling, another
+  // window) always converges without a plugin reload. cwd change and any
+  // plugin mutation tool additionally trigger an immediate refetch on top
+  // of the poll -- see the cwd effect and invalidateQueries calls below.
+  const cwd = useValue(host.state.cwd)
   const { data } = useQuery({
-    queryKey: [ID, 'fixture'],
-    queryFn: () => Promise.resolve(FIXTURE),
-    staleTime: Infinity
+    queryKey: [ID, 'decks', cwd],
+    queryFn: () => ctx.rest('/decks'),
+    refetchInterval: 2000, // DECKS_POLL_MS -- cheap revision poll cadence (card t_f0bff516)
+    placeholderData: FIXTURE
   })
+
+  // Immediate refetch on focused-project change: queryKey already includes
+  // cwd (so a project switch gets its own cache entry instead of showing
+  // stale data under the wrong key), and this explicitly kicks the refetch
+  // rather than waiting for the next poll tick.
+  useEffect(() => {
+    qc.invalidateQueries({ queryKey: [ID, 'decks'] })
+  }, [cwd])
+
+  // Immediate refetch after any Deck Lab mutation tool (agent-side
+  // deck_import applying a write): tracked via ctx.onEvent, so it is
+  // removed automatically on unload/reload/disable -- no leaked listener.
+  useEffect(
+    () =>
+      ctx.onEvent('tool.complete', event => {
+        if (event?.name === 'deck_import') {
+          qc.invalidateQueries({ queryKey: [ID, 'decks'] })
+        }
+      }),
+    [ctx]
+  )
 
   const decks = data?.decks ?? []
   const selectedDeck = decks.find(d => d.path === selectedPath) ?? null
