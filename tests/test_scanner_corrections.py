@@ -114,9 +114,9 @@ def test_diagnostics_carry_code_message_path_line_severity(tmp_path):
     diag = match.errors[0]
     assert diag.code == "DECK_FRONTMATTER_MISSING"
     assert diag.message
-    assert diag.path == "decks/commander/broken"
+    assert diag.path == "decks/commander/broken/README.md"
     assert diag.severity == "error"
-    assert hasattr(diag, "line")
+    assert diag.line == 1
 
 
 def test_deck_frontmatter_error_reports_readme_field_line(tmp_path):
@@ -286,3 +286,88 @@ def test_compute_revision_prunes_large_excluded_cache_and_images_tree(tmp_path):
 
     after = compute_revision(decks_root)
     assert before == after
+
+
+def test_valid_mainboard_with_invalid_sideboard_sibling_is_invalid(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "mixed-boards"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: Mixed\nformat: commander\n"
+        "color_identity: [R]\nstatus: built\n---\n",
+    )
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+    _write(
+        deck_dir / "sideboard.md",
+        "---\nschema: hermes-mtg/board/v1\nname: Sideboard\nkind: nope\norder: 20\n---\n",
+    )
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/mixed-boards")
+    assert match.valid is False
+    diag = next(e for e in match.errors if e.code == "BOARD_KIND_INVALID")
+    assert diag.path == "decks/commander/mixed-boards/sideboard.md"
+    assert any(b.path == "decks/commander/mixed-boards/mainboard.md" for b in match.boards)
+
+
+def test_valid_mainboard_with_plain_docs_markdown_is_valid(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "mixed-docs"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: Docs\nformat: commander\n"
+        "color_identity: [R]\nstatus: built\n---\n",
+    )
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+    _write(deck_dir / "piloting.md", "# Piloting\n")
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/mixed-docs")
+    assert match.valid is True
+    assert match.errors == ()
+    assert [b.path for b in match.boards] == ["decks/commander/mixed-docs/mainboard.md"]
+
+
+def test_docs_only_markdown_reports_generic_missing_board_at_deck_path(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "docs-only"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v1\nname: DocsOnly\nformat: commander\n"
+        "color_identity: [R]\nstatus: built\n---\n",
+    )
+    _write(deck_dir / "piloting.md", "# Piloting\n")
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/docs-only")
+    assert match.valid is False
+    diag = next(e for e in match.errors if e.code == "BOARD_FRONTMATTER_MISSING")
+    assert diag.path == "decks/commander/docs-only"
+    assert not any("piloting" in e.path for e in match.errors)
+
+
+def test_unsupported_readme_schema_reports_readme_path_and_schema_line(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "bad-readme-schema"
+    _write(
+        deck_dir / "README.md",
+        "---\nschema: hermes-mtg/deck/v2\nname: Bad\nformat: commander\n"
+        "color_identity: [R]\nstatus: built\n---\n",
+    )
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/bad-readme-schema")
+    assert match.valid is False
+    diag = next(e for e in match.errors if e.code == "DECK_SCHEMA_UNSUPPORTED")
+    assert diag.path == "decks/commander/bad-readme-schema/README.md"
+    assert diag.line == 2
+
+
+def test_missing_readme_frontmatter_reports_readme_path_and_line_one(tmp_path):
+    deck_dir = tmp_path / "decks" / "commander" / "no-frontmatter"
+    _write(deck_dir / "README.md", "# no frontmatter\n")
+    _write(deck_dir / "mainboard.md", GOOD_BOARD)
+
+    decks = scan_repository(tmp_path / "decks")
+    match = next(d for d in decks if d.path == "decks/commander/no-frontmatter")
+    assert match.valid is False
+    diag = next(e for e in match.errors if e.code == "DECK_FRONTMATTER_MISSING")
+    assert diag.path == "decks/commander/no-frontmatter/README.md"
+    assert diag.line == 1

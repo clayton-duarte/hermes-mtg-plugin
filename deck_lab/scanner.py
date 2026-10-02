@@ -202,13 +202,16 @@ def _deck_frontmatter_diagnostics(
         "status": "unknown",
     }
 
+    err_path = field_path or rel_path
+
     if frontmatter is None:
         return (
             [
                 ValidationError(
                     code="DECK_FRONTMATTER_MISSING",
                     message="Deck README has no recognizable frontmatter block.",
-                    path=rel_path,
+                    path=err_path,
+                    line=1,
                 )
             ],
             sanitized,
@@ -220,14 +223,14 @@ def _deck_frontmatter_diagnostics(
                 ValidationError(
                     code="DECK_SCHEMA_UNSUPPORTED",
                     message=f"Deck schema must be {DECK_SCHEMA_V1!r}.",
-                    path=rel_path,
+                    path=err_path,
+                    line=_frontmatter_field_line(raw_text, "schema"),
                 )
             ],
             sanitized,
         )
 
     diagnostics: list[ValidationError] = []
-    err_path = field_path or rel_path
 
     name = frontmatter.get("name")
     if _is_nonempty_str(name):
@@ -359,6 +362,16 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
                 candidate_resolved = _resolve_within(root_resolved, candidate)
                 if candidate_resolved is None:
                     continue
+                try:
+                    candidate_text = candidate_resolved.read_text()
+                except OSError:
+                    candidate_text = ""
+                candidate_fm, _ = _split_frontmatter(candidate_text)
+                if candidate_fm is None or not str(candidate_fm.get("schema", "")).startswith(
+                    "hermes-mtg/board/"
+                ):
+                    # Not a board candidate at all (e.g. piloting.md / plain notes).
+                    continue
                 board_rel = f"decks/{candidate_resolved.relative_to(root_resolved).as_posix()}"
                 board_fm, board_diag = _is_board_markdown(candidate_resolved, board_rel)
                 if board_fm is None:
@@ -375,17 +388,16 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
                 )
 
             deck_diagnostics_all = list(deck_diagnostics)
-            if not boards:
-                if board_file_errors:
-                    deck_diagnostics_all.extend(board_file_errors)
-                else:
-                    deck_diagnostics_all.append(
-                        ValidationError(
-                            code="BOARD_FRONTMATTER_MISSING",
-                            message="Deck has no recognizable board markdown.",
-                            path=rel_path,
-                        )
+            if board_file_errors:
+                deck_diagnostics_all.extend(board_file_errors)
+            elif not boards:
+                deck_diagnostics_all.append(
+                    ValidationError(
+                        code="BOARD_FRONTMATTER_MISSING",
+                        message="Deck has no recognizable board markdown.",
+                        path=rel_path,
                     )
+                )
 
             valid = not deck_diagnostics_all
 

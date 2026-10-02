@@ -34,7 +34,8 @@ def test_scan_repository_reports_invalid_deck_with_bad_frontmatter(tmp_path):
     assert match.valid is False
     assert "DECK_FRONTMATTER_MISSING" in [e.code for e in match.errors]
     diag = next(e for e in match.errors if e.code == "DECK_FRONTMATTER_MISSING")
-    assert diag.path == "decks/commander/broken-deck"
+    assert diag.path == "decks/commander/broken-deck/README.md"
+    assert diag.line == 1
     assert diag.severity == "error"
 
 
