@@ -41,7 +41,7 @@
 
 import { Badge, Button, cn, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 const ID = 'deck-lab'
 
@@ -895,6 +895,33 @@ function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, 
   })
 }
 
+/** <img> that never shows a stale bitmap under a new src. Keyed by `src` at
+ *  the call site (forcing full remount on change) and additionally tracks
+ *  its own loaded state per-src here, so even without the external key a
+ *  card/face switch cannot render the previous image under the new title --
+ *  it shows a neutral loading placeholder until *this* src's onLoad fires. */
+function ImageWithLoadingGuard({ alt, src }) {
+  const [loadedSrc, setLoadedSrc] = useState(null)
+
+  useEffect(() => {
+    setLoadedSrc(null)
+  }, [src])
+
+  return jsxs('div', {
+    className: 'relative w-full',
+    children: [
+      loadedSrc !== src &&
+        jsx('div', { className: 'flex h-48 items-center justify-center rounded bg-(--ui-row-hover-background) text-[0.75rem] text-(--ui-text-quaternary)', children: 'Loading art…' }),
+      jsx('img', {
+        alt,
+        className: cn('w-full rounded', loadedSrc !== src && 'hidden'),
+        src,
+        onLoad: () => setLoadedSrc(src)
+      })
+    ]
+  })
+}
+
 /** Reserved card preview column: hover/focus-driven unless pinned, shows
  *  cached/loading/error placeholders and a DFC face toggle. When a face has
  *  no per-face image (e.g. the real `prepare`-layout Joined Researchers //
@@ -936,7 +963,15 @@ function PreviewColumn({ card, onFaceToggle, pinned, faceIndex }) {
           className: 'flex flex-col gap-2',
           children: [
             imageUrl
-              ? jsx('img', { alt: hasFaces ? face?.name ?? card.name : card.name, className: 'w-full rounded', src: imageUrl })
+              // `key: imageUrl` forces React to unmount/remount the <img> the
+              // instant the active card/face/image URL changes, instead of
+              // reusing the previous DOM node (which would keep showing the
+              // old card's bitmap under the new title until the new image
+              // finishes loading). ImageWithLoadingGuard additionally hides
+              // itself until *its own* onLoad fires for *this* src, so a
+              // slow-loading new image shows a neutral loading state rather
+              // than the prior frame.
+              ? jsx(ImageWithLoadingGuard, { key: imageUrl, alt: hasFaces ? face?.name ?? card.name : card.name, src: imageUrl })
               : jsx('div', { className: 'flex h-48 items-center justify-center rounded bg-(--ui-row-hover-background) text-[0.75rem] text-(--ui-text-quaternary)', children: 'No art cached' }),
             hasFaces &&
               jsx(Button, {
