@@ -11,10 +11,14 @@ Locked schema identifiers:
 
 ## Status
 
-This card (`t_09171717`) locks the contract fixtures and model only. Parser,
-scanner, Scryfall resolver, interchange adapters, and the desktop pane are
-separate, downstream lanes -- see `tests/` for the RED tests that define each
-lane's contract surface.
+Backend (`plugin.yaml`, `dashboard/plugin_api.py`, five tools) and desktop
+(`desktop/plugin.js`) halves are both implemented and wired to live API
+data (not the bundled fixture): `/revision` drives a cheap ~2s poll that
+invalidates `/decks` (list) and the selected board's `/deck` (detail);
+selection persistence is keyed by the live repository identity. See
+`docs/INSTALL.md` for the profile-safe install/dev-sync flow, independent
+backend/desktop enable gates, gateway restart, and cold-start inventory
+instructions.
 
 ## Fixtures
 

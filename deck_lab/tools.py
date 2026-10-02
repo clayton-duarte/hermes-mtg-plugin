@@ -21,8 +21,6 @@ import json
 import os
 from typing import Any, Callable, Optional
 
-from deck_lab.service import DeckLabService, DeckLabServiceError
-
 # Bound on any single tool's JSON response so a huge repository/board can
 # never flood model context; this mirrors the service's own list/text bounds
 # but is enforced again here as the final wrapper-level guarantee.
@@ -46,12 +44,21 @@ def _bounded(data: dict) -> str:
     )
 
 
-def _service_for(args: dict) -> DeckLabService:
+def _service_for(args: dict):
+    # Keep plugin discovery/registration dependency-light. Hermes installs the
+    # declared runtime dependencies before enabling the plugin, but its
+    # isolated admission probe intentionally imports the entrypoint in a bare
+    # interpreter. The service (and PyYAML) is only needed when a tool actually
+    # executes, not while the five schemas are registered.
+    from deck_lab.service import DeckLabService
+
     workspace_root = args.get("workspace_root") or os.getcwd()
     return DeckLabService(workspace_root)
 
 
-def _run(args: dict, call: Callable[[DeckLabService], dict]) -> str:
+def _run(args: dict, call: Callable[[Any], dict]) -> str:
+    from deck_lab.service import DeckLabServiceError
+
     try:
         service = _service_for(args)
         result = call(service)
