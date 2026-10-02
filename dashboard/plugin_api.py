@@ -19,8 +19,19 @@ every response conforms exactly to `hermes-mtg/service/v1`.
 """
 
 import os
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
+
+# The real dashboard loader imports this file by path
+# (`importlib.util.spec_from_file_location`), never as part of a package,
+# so `deck_lab` -- its sibling package one directory up -- is not
+# guaranteed to be on `sys.path`. Make the repo root importable before
+# touching `deck_lab` so this module imports cleanly from any neutral cwd
+# or PYTHONPATH, exactly as the standalone-import contract requires.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
@@ -31,19 +42,26 @@ from deck_lab.service import DeckLabService, DeckLabServiceError
 router = APIRouter()
 
 
-def _workspace_root() -> Path:
-    """The focused Hermes cwd, re-read per request.
+def _workspace_root(workspace_root: Optional[str] = None) -> Path:
+    """The focused Hermes cwd for this request.
 
-    Reading `os.getcwd()` per-request (rather than caching it at import
-    time) matters for the standalone-import test and for any host process
-    that changes directory after loading this module once.
+    The dashboard is a long-lived server process with one process-wide
+    `cwd`, which cannot represent multiple focused chat projects. Callers
+    that know their focused project pass it explicitly as `workspace_root`
+    (query param on GET routes, body field on POST routes); it is resolved
+    relative to the server process cwd when relative, or used as-is when
+    absolute. Falling back to `os.getcwd()` when omitted preserves the
+    single-project/standalone-test behavior.
     """
 
+    if workspace_root:
+        candidate = Path(workspace_root)
+        return candidate if candidate.is_absolute() else (Path(os.getcwd()) / candidate)
     return Path(os.getcwd())
 
 
-def _service() -> DeckLabService:
-    return DeckLabService(_workspace_root())
+def _service(workspace_root: Optional[str] = None) -> DeckLabService:
+    return DeckLabService(_workspace_root(workspace_root))
 
 
 def _error_response(exc: DeckLabServiceError) -> JSONResponse:
@@ -51,41 +69,46 @@ def _error_response(exc: DeckLabServiceError) -> JSONResponse:
 
 
 @router.get("/revision")
-def get_revision():
+def get_revision(workspace_root: Optional[str] = None):
     try:
-        return _service().revision()
+        return _service(workspace_root).revision()
     except DeckLabServiceError as exc:
         return _error_response(exc)
 
 
 @router.get("/decks")
-def list_decks(limit: int = 200):
+def list_decks(limit: int = 200, workspace_root: Optional[str] = None):
     try:
-        return _service().list_decks(limit=limit)
+        return _service(workspace_root).list_decks(limit=limit)
     except DeckLabServiceError as exc:
         return _error_response(exc)
 
 
 @router.get("/deck")
-def get_deck(path: str, board_path: Optional[str] = None, resolve_remote: bool = True):
+def get_deck(
+    path: str,
+    board_path: Optional[str] = None,
+    resolve_remote: bool = True,
+    workspace_root: Optional[str] = None,
+):
     try:
-        return _service().get_deck(path, board_path=board_path, resolve_remote=resolve_remote)
+        return _service(workspace_root).get_deck(path, board_path=board_path, resolve_remote=resolve_remote)
     except DeckLabServiceError as exc:
         return _error_response(exc)
 
 
 @router.get("/validate")
-def validate(path: str, resolve_remote: bool = False):
+def validate(path: str, resolve_remote: bool = False, workspace_root: Optional[str] = None):
     try:
-        return _service().validate(path, resolve_remote=resolve_remote)
+        return _service(workspace_root).validate(path, resolve_remote=resolve_remote)
     except DeckLabServiceError as exc:
         return _error_response(exc)
 
 
 @router.get("/scryfall/cache-status")
-def cache_status():
+def cache_status(workspace_root: Optional[str] = None):
     try:
-        return _service().cache_status()
+        return _service(workspace_root).cache_status()
     except DeckLabServiceError as exc:
         return _error_response(exc)
 
@@ -97,14 +120,15 @@ class ImportBody(BaseModel):
     text: Optional[str] = None
     source_file: Optional[str] = None
     apply: bool = False
-    expected_hash: Optional[dict] = None
+    expected_hash: Optional[Union[str, dict]] = None
     overwrite: bool = False
+    workspace_root: Optional[str] = None
 
 
 @router.post("/import")
 def import_deck(body: ImportBody):
     try:
-        return _service().import_deck(
+        return _service(body.workspace_root).import_deck(
             dialect=body.dialect,
             target_deck_path=body.target_deck_path,
             target_board_path=body.target_board_path,
@@ -122,12 +146,15 @@ class ExportBody(BaseModel):
     deck_path: str
     board_path: Optional[str] = None
     dialect: str
+    workspace_root: Optional[str] = None
 
 
 @router.post("/export")
 def export_deck(body: ExportBody):
     try:
-        return _service().export_deck(body.deck_path, board_path=body.board_path, dialect=body.dialect)
+        return _service(body.workspace_root).export_deck(
+            body.deck_path, board_path=body.board_path, dialect=body.dialect
+        )
     except DeckLabServiceError as exc:
         return _error_response(exc)
 
