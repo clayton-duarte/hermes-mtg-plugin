@@ -8,9 +8,12 @@
  * faithful, non-fabricated transform of the landed golden Nelly Borca fixture
  * (tests/fixtures/nelly-borca/decks/commander/nelly-borca/{README,mainboard}.md),
  * conforming to the `hermes-mtg/service/v1` schema (see deck_lab/ui/fixture.py,
- * the Python source of truth this JS literal is generated from -- see
- * scratch_gen_js.py in this branch's history; keep the two in sync if either
- * changes). No Markdown is read, no backend route is called, and no
+ * the Python source of truth this JS literal is generated from -- run
+ * `python scripts/gen_deck_lab_fixture_js.py` to regenerate the block between
+ * the FIXTURE_GENERATED_START/END markers below, and
+ * `python scripts/gen_deck_lab_fixture_js.py --check` to verify it is in
+ * sync; tests/test_ui_fixture_js_parity.py enforces this in CI. No Markdown
+ * is read, no backend route is called, and no
  * scan/parse/scryfall lane is touched. Live routes, polling, and repository
  * refresh are the later integration card (t_f0bff516) -- this pane is
  * read-only against the fixture below.
@@ -36,7 +39,7 @@
  * deck_lab/ui/pane_contract.py locks that count at 2.
  */
 
-import { Badge, Button, cn, host, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient } from '@hermes/plugin-sdk'
+import { Badge, Button, cn, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useMemo, useState } from 'react'
 
@@ -44,6 +47,7 @@ const ID = 'deck-lab'
 
 // --- Fixture data (hermes-mtg/service/v1) -----------------------------------
 // FIXTURE/MOCK DATA ONLY. See file header for provenance/fidelity notes.
+// --- FIXTURE_GENERATED_START ---
 const FIXTURE = {
   schema: "hermes-mtg/service/v1",
   repository_id: "fixture-repo",
@@ -279,7 +283,7 @@ const FIXTURE = {
                             oracle_id: "ec744a2d-4a33-4807-bce0-d95cd5277b1f",
                             scryfall_id: "1ebaafe0-3a9a-424c-8698-d26e7be45343",
                             scryfall_uri: "https://scryfall.com/card/sos/23/joined-researchers-secret-rendezvous?utm_source=api",
-                            mana_cost: "{1}",
+                            mana_cost: "{1}{W} // {1}{W}{W}",
                             layout: "prepare",
                             image_uris: {
                               normal: "https://cards.scryfall.io/normal/front/1/e/1ebaafe0-3a9a-424c-8698-d26e7be45343.jpg?1783903702"
@@ -287,12 +291,12 @@ const FIXTURE = {
                             card_faces: [
                               {
                                 name: "Joined Researchers",
-                                mana_cost: "{1}",
+                                mana_cost: "{1}{W}",
                                 image_uris: {}
                               },
                               {
                                 name: "Secret Rendezvous",
-                                mana_cost: "{1}{W}",
+                                mana_cost: "{1}{W}{W}",
                                 image_uris: {}
                               }
                             ]
@@ -610,6 +614,7 @@ const FIXTURE = {
     }
   ]
 }
+// --- FIXTURE_GENERATED_END ---
 
 
 // --- Helpers -----------------------------------------------------------------
@@ -741,7 +746,7 @@ function DeckPickerRow({ deck, onSelect, selected }) {
  *  hover/focus preview trigger, and a row-level click/tap pin that works
  *  without requiring hover first (architect correction: pin must not be
  *  hover-only). */
-function CardRow({ card, isPinned, onHoverPreview, onPinToggle }) {
+function CardRow({ card, ctx, isPinned, onHoverPreview, onPinToggle }) {
   const scry = card.scryfall ?? {}
   const state = scry.state ?? 'unresolved'
   const validUrl = typeof scry.scryfall_uri === 'string' && scry.scryfall_uri.startsWith('https://scryfall.com/')
@@ -749,7 +754,7 @@ function CardRow({ card, isPinned, onHoverPreview, onPinToggle }) {
   const openCard = event => {
     event.stopPropagation()
     if (state !== 'cached' || !validUrl) return
-    void host.os?.openExternal(scry.scryfall_uri)
+    void ctx.os.openExternal(scry.scryfall_uri)
   }
 
   // Row click/tap pins/unpins the row's card directly (no hover required);
@@ -805,9 +810,15 @@ function CardRow({ card, isPinned, onHoverPreview, onPinToggle }) {
 /** Category header + its card rows. Recurses through every nested level
  *  (flattenCategories already expanded depth), and shows a quantity-summed
  *  count, not a row count. */
-function CategoryBlock({ onHoverPreview, onPinToggle, pinnedName, row }) {
+function CategoryBlock({ ctx, onHoverPreview, onPinToggle, pinnedName, row }) {
+  // Runtime-safe indentation: a bounded inline marginLeft, not a dynamically
+  // synthesized `ml-${n}` utility class (the uncompiled host only ships the
+  // literal classes it was built with, so an on-the-fly `ml-6` never takes
+  // effect and deep categories visually collapse).
+  const indentPx = Math.min(row.depth, 5) * 12
   return jsxs('div', {
-    className: cn('flex flex-col', row.depth > 0 && `ml-${Math.min(row.depth * 3, 9)}`),
+    className: 'flex flex-col',
+    style: indentPx > 0 ? { marginLeft: `${indentPx}px` } : undefined,
     children: [
       jsxs('div', {
         className: 'flex items-center gap-1.5 px-2 pb-0.5 pt-1.5 text-[0.64rem] font-semibold uppercase tracking-[0.1em] text-(--ui-text-tertiary)',
@@ -820,6 +831,7 @@ function CategoryBlock({ onHoverPreview, onPinToggle, pinnedName, row }) {
         jsx(CardRow, {
           key: card.name,
           card,
+          ctx,
           isPinned: pinnedName === card.name,
           onHoverPreview,
           onPinToggle
@@ -830,7 +842,7 @@ function CategoryBlock({ onHoverPreview, onPinToggle, pinnedName, row }) {
 }
 
 /** Decklist column: board tabs + one main scroller over nested categories. */
-function DecklistColumn({ boardIndex, deck, onBoardChange, onHoverPreview, onPinToggle, pinnedName }) {
+function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, onPinToggle, pinnedName }) {
   if (!deck) {
     return jsx('div', {
       className: 'flex h-full items-center justify-center p-4 text-center text-[0.75rem] text-(--ui-text-quaternary)',
@@ -877,7 +889,7 @@ function DecklistColumn({ boardIndex, deck, onBoardChange, onHoverPreview, onPin
         children:
           rows.length === 0
             ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', children: 'This board is empty.' })
-            : jsx('div', { className: 'flex flex-col pb-2', children: rows.map(row => jsx(CategoryBlock, { key: row.path.join('/'), row, onHoverPreview, onPinToggle, pinnedName })) })
+            : jsx('div', { className: 'flex flex-col pb-2', children: rows.map(row => jsx(CategoryBlock, { key: row.path.join('/'), ctx, row, onHoverPreview, onPinToggle, pinnedName })) })
       })
     ]
   })
@@ -1001,6 +1013,7 @@ function DeckLabPane({ ctx }) {
           jsx(DecklistColumn, {
             deck: selectedDeck,
             boardIndex,
+            ctx,
             onBoardChange: setBoardIndex,
             onHoverPreview,
             onPinToggle,

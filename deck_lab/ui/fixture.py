@@ -73,14 +73,14 @@ JOINED_RESEARCHERS_SCRYFALL = {
     "oracle_id": "ec744a2d-4a33-4807-bce0-d95cd5277b1f",
     "scryfall_id": "1ebaafe0-3a9a-424c-8698-d26e7be45343",
     "scryfall_uri": "https://scryfall.com/card/sos/23/joined-researchers-secret-rendezvous?utm_source=api",
-    "mana_cost": "{1}",
+    "mana_cost": "{1}{W} // {1}{W}{W}",
     "layout": "prepare",
     "image_uris": {
         "normal": "https://cards.scryfall.io/normal/front/1/e/1ebaafe0-3a9a-424c-8698-d26e7be45343.jpg?1783903702"
     },
     "card_faces": [
-        {"name": "Joined Researchers", "mana_cost": "{1}", "image_uris": {}},
-        {"name": "Secret Rendezvous", "mana_cost": "{1}{W}", "image_uris": {}},
+        {"name": "Joined Researchers", "mana_cost": "{1}{W}", "image_uris": {}},
+        {"name": "Secret Rendezvous", "mana_cost": "{1}{W}{W}", "image_uris": {}},
     ],
 }
 
