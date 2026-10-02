@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 deck_lab_interaction_checks.json
+uv.lock
