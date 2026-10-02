@@ -1,10 +1,11 @@
 """Scryfall batch resolver and persistent stale-while-revalidate cache
-(t_5d228091).
+(t_5d228091, corrected by t_9e8245c7).
 
 Implements:
   - `resolve_collection`: batches identifiers into <=75-item requests to
     POST https://api.scryfall.com/cards/collection with required headers,
-    retries on 429/timeout with backoff, and serves cache-first results.
+    retries on 429/timeout with backoff, paces outbound requests at least
+    500ms apart, and serves cache-first results.
   - `identifier_for_card`: set+collector printing resolution before the
     exact-name fallback, used by callers to build identifier dicts.
   - `ScryfallCache`: a plugin/profile-owned persistent JSON cache (the
@@ -13,9 +14,25 @@ Implements:
     the same call (stale-while-revalidate), never silently dropped.
 
 Unresolved identifiers (timeout exhausted, 429 exhausted, or a Scryfall
-`not_found` entry with no usable cache) resolve to `None` in the result
-dict. Callers render those rows with `models.ERROR_CODES` member
-`REMOTE_CARD_UNRESOLVED` rather than failing parsing.
+`not_found` entry with no usable cache and no successful name fallback)
+resolve to `None` in the result dict. Callers render those rows with
+`models.ERROR_CODES` member `REMOTE_CARD_UNRESOLVED` rather than failing
+parsing.
+
+Response association (defect #1/#2 correction): Scryfall's `/cards/collection`
+response preserves the request order of *found* identifiers in `data` and
+echoes failed identifiers verbatim in `not_found`. A name-only request's
+returned Card object always carries `set`/`collector_number` too, so
+association MUST NOT be done by re-deriving a key from the returned card's
+printing fields -- that silently drops every exact-name request. Instead we
+walk `to_fetch` in request order, consult `not_found` (by identifier value)
+to decide whether a given request failed, and otherwise consume the next
+item from `data` in order.
+
+An identifier dict built for exact-printing resolution may additionally
+carry a `"name"` key (NOT part of the Scryfall wire identifier) that this
+module uses -- and strips before sending -- to retry an unresolved
+set+collector identifier by exact name (defect #2 correction).
 """
 
 from __future__ import annotations
@@ -33,6 +50,9 @@ MAX_IDENTIFIERS_PER_BATCH = 75
 USER_AGENT = "hermes-mtg-plugin/0.1 (+https://github.com/clayton-duarte/hermes-mtg-plugin)"
 STALE_TTL_SECONDS = 24 * 60 * 60  # 24h cache freshness window
 
+# Scryfall's documented /cards/collection rate limit is 2 requests/second.
+MIN_REQUEST_INTERVAL_SECONDS = 0.5
+
 
 def identifier_for_card(set_code: Optional[str], collector_number: Optional[str], name: str) -> dict:
     """Set+collector printing resolution before the exact-name fallback.
@@ -43,7 +63,7 @@ def identifier_for_card(set_code: Optional[str], collector_number: Optional[str]
     """
 
     if set_code and collector_number:
-        return {"set": set_code.lower(), "collector_number": str(collector_number)}
+        return {"set": set_code.lower(), "collector_number": str(collector_number), "name": name}
     return {"name": name}
 
 
@@ -53,10 +73,17 @@ def _identifier_key(identifier: dict) -> tuple:
     return ("name", identifier.get("name"))
 
 
-def _card_key(card: dict) -> tuple:
-    if card.get("set") and card.get("collector_number"):
-        return ("set_collector", card["set"].lower(), str(card["collector_number"]))
-    return ("name", card.get("name"))
+def _wire_identifier(identifier: dict) -> dict:
+    """The exact shape POSTed to Scryfall -- strips any caller-side-only
+    metadata (e.g. a `name` fallback hint carried alongside set+collector)."""
+
+    if "set" in identifier and "collector_number" in identifier:
+        return {"set": identifier["set"], "collector_number": identifier["collector_number"]}
+    return {"name": identifier["name"]}
+
+
+def _identifier_matches_not_found(wire_identifier: dict, not_found_entry: dict) -> bool:
+    return wire_identifier == not_found_entry
 
 
 def _batches(identifiers, size=MAX_IDENTIFIERS_PER_BATCH):
@@ -143,13 +170,33 @@ def _projection_from_scryfall_card(card: dict) -> ScryfallProjection:
     )
 
 
-def _post_with_retry(http_client, identifiers, max_retries, sleep_fn):
+class _Pacer:
+    """Enforces >= `min_interval` seconds between outbound requests,
+    using an injectable clock/sleeper for deterministic tests."""
+
+    def __init__(self, min_interval, clock_fn, sleep_fn):
+        self.min_interval = min_interval
+        self.clock_fn = clock_fn
+        self.sleep_fn = sleep_fn
+        self._last_sent_at = None
+
+    def before_request(self) -> None:
+        if self._last_sent_at is not None:
+            elapsed = self.clock_fn() - self._last_sent_at
+            remaining = self.min_interval - elapsed
+            if remaining > 0:
+                self.sleep_fn(remaining)
+        self._last_sent_at = self.clock_fn()
+
+
+def _post_with_retry(http_client, identifiers, max_retries, sleep_fn, pacer):
     """POST one batch, retrying on 429/timeout. Returns the parsed JSON
     body, or None if every attempt failed."""
 
     attempt = 0
     while attempt < max_retries:
         attempt += 1
+        pacer.before_request()
         try:
             response = http_client.post(
                 SCRYFALL_COLLECTION_URL,
@@ -178,6 +225,37 @@ def _post_with_retry(http_client, identifiers, max_retries, sleep_fn):
     return None
 
 
+def _resolve_batch(to_fetch, http_client, max_retries, sleep_fn, pacer):
+    """Resolve one batch of (key, identifier) pairs. Returns a dict of
+    `key -> ScryfallProjection | None`."""
+
+    wire_identifiers = [_wire_identifier(identifier) for _, identifier in to_fetch]
+    body = _post_with_retry(http_client, wire_identifiers, max_retries=max_retries, sleep_fn=sleep_fn, pacer=pacer)
+
+    if body is None:
+        return {key: None for key, _identifier in to_fetch}
+
+    data = list(body.get("data", []))
+    not_found = list(body.get("not_found", []))
+    data_iter = iter(data)
+
+    resolved: dict = {}
+    for (key, _identifier), wire_identifier in zip(to_fetch, wire_identifiers):
+        matched_not_found = False
+        for i, entry in enumerate(not_found):
+            if _identifier_matches_not_found(wire_identifier, entry):
+                matched_not_found = True
+                del not_found[i]
+                break
+        if matched_not_found:
+            resolved[key] = None
+            continue
+        card = next(data_iter, None)
+        resolved[key] = _projection_from_scryfall_card(card) if card is not None else None
+
+    return resolved
+
+
 def resolve_collection(
     identifiers,
     http_client=None,
@@ -186,25 +264,36 @@ def resolve_collection(
     no_cache=False,
     max_retries=3,
     sleep_fn=None,
+    clock_fn=None,
 ):
     """Batch `identifiers` (each a Scryfall identifier dict -- see
     `identifier_for_card`) into <=75-item POST /cards/collection requests.
+
+    An identifier produced for exact-printing resolution (containing `set`
+    and `collector_number`) may additionally carry a `name` key; on an
+    exact-printing `not_found` miss, that name is retried as a single
+    exact-name fallback request. The `name` key is never sent to Scryfall.
 
     `dry_run=True` returns the batches themselves (`list[list[dict]]`)
     with no network calls -- used to prove the 75-identifier cap.
 
     Otherwise returns `{identifier_key: ScryfallProjection | None}`.
     `None` means the identifier is a valid row with no resolvable
-    Scryfall data (timeout exhausted, 429 exhausted, or `not_found`);
-    callers render it with `REMOTE_CARD_UNRESOLVED` rather than failing.
+    Scryfall data (timeout exhausted, 429 exhausted, `not_found` with no
+    successful fallback); callers render it with `REMOTE_CARD_UNRESOLVED`
+    rather than failing.
     """
 
     batches = list(_batches(identifiers))
     if dry_run:
         return batches
 
-    sleep_fn = sleep_fn or (lambda _seconds: None)
+    sleep_fn = sleep_fn or time.sleep
+    clock_fn = clock_fn or time.monotonic
+    pacer = _Pacer(MIN_REQUEST_INTERVAL_SECONDS, clock_fn, sleep_fn)
+
     results: dict = {}
+    fallback_candidates: list = []  # [(key, name)] for exact-printing misses
 
     for batch in batches:
         to_fetch = []
@@ -220,37 +309,31 @@ def resolve_collection(
         if not to_fetch:
             continue
 
-        body = _post_with_retry(
-            http_client,
-            [identifier for _, identifier in to_fetch],
-            max_retries=max_retries,
-            sleep_fn=sleep_fn,
-        )
-
-        if body is None:
-            # Total failure (e.g. timeout/429 retries exhausted): keep any
-            # stale value already recorded in `results`; otherwise mark
-            # unresolved so the row still renders.
-            for key, _identifier in to_fetch:
-                results.setdefault(key, None)
-            continue
-
-        resolved_by_key = {_card_key(card): _projection_from_scryfall_card(card) for card in body.get("data", [])}
+        resolved = _resolve_batch(to_fetch, http_client, max_retries, sleep_fn, pacer)
 
         for key, identifier in to_fetch:
-            projection = resolved_by_key.get(key)
-            if projection is None and key[0] == "set_collector":
-                # Printing-exact miss: Scryfall's `not_found` array means
-                # this specific identifier did not resolve. No further
-                # fallback is attempted here -- exact-name fallback is a
-                # caller-side identifier choice (`identifier_for_card`),
-                # not a resolver-side retry.
-                projection = None
+            projection = resolved.get(key)
             if projection is not None:
                 results[key] = projection
                 if cache is not None:
                     cache.put(key, asdict(projection))
             else:
-                results.setdefault(key, None)
+                if key[0] == "set_collector" and identifier.get("name"):
+                    fallback_candidates.append((key, identifier["name"]))
+                else:
+                    results.setdefault(key, None)
+
+    if fallback_candidates:
+        fallback_to_fetch = [(key, {"name": name}) for key, name in fallback_candidates]
+        for fallback_batch in _batches(fallback_to_fetch):
+            resolved = _resolve_batch(fallback_batch, http_client, max_retries, sleep_fn, pacer)
+            for key, identifier in fallback_batch:
+                projection = resolved.get(key)
+                if projection is not None:
+                    results[key] = projection
+                    if cache is not None:
+                        cache.put(key, asdict(projection))
+                else:
+                    results.setdefault(key, None)
 
     return results

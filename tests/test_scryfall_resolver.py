@@ -59,7 +59,7 @@ def _card(name, **overrides):
 
 def test_identifier_for_card_prefers_set_collector_over_name():
     identifier = identifier_for_card("znr", "100", "Essence Scatter")
-    assert identifier == {"set": "znr", "collector_number": "100"}
+    assert identifier == {"set": "znr", "collector_number": "100", "name": "Essence Scatter"}
 
 
 def test_identifier_for_card_falls_back_to_exact_name():
@@ -136,7 +136,11 @@ def test_resolve_collection_retries_on_429_then_succeeds():
     )
 
     assert results[("name", "Sol Ring")].name == "Sol Ring"
-    assert len(sleeps) == 1
+    # One sleep from the 429 Retry-After backoff, plus one from pacing
+    # the second outbound request >=500ms after the first.
+    assert len(sleeps) == 2
+    assert sleeps[0] == 0.0
+    assert sleeps[1] >= 0.4
     assert len(http_client.calls) == 2
 
 
@@ -183,6 +187,82 @@ def test_resolve_collection_caps_at_75_and_issues_multiple_requests():
     assert len(http_client.calls) == 2
     assert len(http_client.calls[0]["json"]["identifiers"]) == MAX_IDENTIFIERS_PER_BATCH
     assert len(http_client.calls[1]["json"]["identifiers"]) == 5
+
+
+def test_resolve_collection_mixed_batch_not_found_maps_correct_identifiers():
+    http_client = FakeHttpClient(
+        [
+            FakeResponse(
+                json_body={
+                    "data": [_card("Sol Ring"), _card("Arcane Signet")],
+                    "not_found": [{"name": "Nonexistent Card"}],
+                }
+            )
+        ]
+    )
+
+    results = resolve_collection(
+        [{"name": "Sol Ring"}, {"name": "Nonexistent Card"}, {"name": "Arcane Signet"}],
+        http_client=http_client,
+        sleep_fn=lambda s: None,
+    )
+
+    assert results[("name", "Sol Ring")].name == "Sol Ring"
+    assert results[("name", "Nonexistent Card")] is None
+    assert results[("name", "Arcane Signet")].name == "Arcane Signet"
+
+
+def test_resolve_collection_exact_printing_miss_falls_back_to_exact_name():
+    identifier = identifier_for_card("znr", "100", "Essence Scatter")
+    http_client = FakeHttpClient(
+        [
+            FakeResponse(json_body={"data": [], "not_found": [{"set": "znr", "collector_number": "100"}]}),
+            FakeResponse(json_body={"data": [_card("Essence Scatter")], "not_found": []}),
+        ]
+    )
+
+    results = resolve_collection([identifier], http_client=http_client, sleep_fn=lambda s: None)
+
+    key = ("set_collector", "znr", "100")
+    assert results[key] is not None
+    assert results[key].name == "Essence Scatter"
+    assert len(http_client.calls) == 2
+    assert http_client.calls[1]["json"] == {"identifiers": [{"name": "Essence Scatter"}]}
+
+
+def test_resolve_collection_exact_printing_hit_performs_no_fallback():
+    identifier = identifier_for_card("znr", "100", "Essence Scatter")
+    http_client = FakeHttpClient(
+        [FakeResponse(json_body={"data": [_card("Essence Scatter", set="znr", collector_number="100")], "not_found": []})]
+    )
+
+    results = resolve_collection([identifier], http_client=http_client, sleep_fn=lambda s: None)
+
+    key = ("set_collector", "znr", "100")
+    assert results[key] is not None
+    assert len(http_client.calls) == 1
+
+
+def test_resolve_collection_paces_requests_at_least_500ms_apart():
+    identifiers = [{"name": f"Card {i}"} for i in range(80)]
+    responses = [FakeResponse(json_body={"data": [], "not_found": []}) for _ in range(2)]
+    http_client = FakeHttpClient(responses)
+
+    clock = {"t": 0.0}
+    sleeps = []
+
+    def fake_clock():
+        return clock["t"]
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        clock["t"] += seconds
+
+    resolve_collection(identifiers, http_client=http_client, sleep_fn=fake_sleep, clock_fn=fake_clock)
+
+    assert len(http_client.calls) == 2
+    assert len(sleeps) == 1
+    assert sleeps[0] >= 0.5
 
 
 def test_resolve_collection_serves_fresh_cache_without_network_call(tmp_path):
