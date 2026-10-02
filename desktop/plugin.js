@@ -41,7 +41,7 @@
 
 import { Badge, Button, cn, host, Input, PANES_AREA, ScrollArea, SearchField, Tabs, TabsList, TabsTrigger, Tip, useQuery, useQueryClient, useValue } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, Fragment } from 'react'
 
 const ID = 'deck-lab'
 
@@ -890,7 +890,7 @@ function CategoryBlock({ ctx, onHoverPreview, onPinToggle, pinnedName, row }) {
  *  the nested category/card tree for the ACTIVE tab comes from `activeBoard`
  *  (the live `/deck` response for the currently selected board), since a
  *  `BoardSummary` never carries `categories` itself. */
-function DecklistColumn({ activeBoard, boardIndex, ctx, deck, loadingBoard, onBoardChange, onHoverPreview, onPinToggle, pinnedName }) {
+function DecklistColumn({ activeBoard, boardError, boardIndex, ctx, deck, loadingBoard, onBoardChange, onHoverPreview, onPinToggle, pinnedName }) {
   if (!deck) {
     return jsx('div', {
       className: 'flex h-full items-center justify-center p-4 text-center text-[0.75rem] text-(--ui-text-quaternary)',
@@ -935,10 +935,12 @@ function DecklistColumn({ activeBoard, boardIndex, ctx, deck, loadingBoard, onBo
         className: 'min-h-0 flex-1',
         children:
           loadingBoard
-            ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', children: 'Loading…' })
-            : rows.length === 0
-              ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', children: 'This board is empty.' })
-              : jsx('div', { className: 'flex flex-col pb-2', children: rows.map(row => jsx(CategoryBlock, { key: row.path.join('/'), ctx, row, onHoverPreview, onPinToggle, pinnedName })) })
+            ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', 'data-testid': 'board-loading', children: 'Loading…' })
+            : boardError
+              ? jsx('div', { className: 'p-3 text-[0.75rem] text-destructive', 'data-testid': 'board-error', children: 'Could not load this board.' })
+              : rows.length === 0
+                ? jsx('div', { className: 'p-3 text-[0.75rem] text-(--ui-text-quaternary)', 'data-testid': 'board-empty', children: 'This board is empty.' })
+                : jsx('div', { className: 'flex flex-col pb-2', children: rows.map(row => jsx(CategoryBlock, { key: row.path.join('/'), ctx, row, onHoverPreview, onPinToggle, pinnedName })) })
       })
     ]
   })
@@ -1054,30 +1056,56 @@ function DeckLabPane({ ctx }) {
   // `workspace_root` -- never relies on the server process's own cwd.
   const cwd = useValue(host.state.cwd)
   const workspaceRoot = cwd ?? ''
-  const restQuery = path => `${path}?workspace_root=${encodeURIComponent(workspaceRoot)}`
+  // Append `workspace_root` with the correct separator for whatever the
+  // caller already built -- never blindly concatenates a second `?`, which
+  // would swallow an existing query string (e.g. `/deck?path=...`) into the
+  // value of its last param instead of adding a sibling param.
+  const restQuery = path => {
+    const params = new URLSearchParams()
+    params.set('workspace_root', workspaceRoot)
+    const separator = path.includes('?') ? '&' : '?'
+    return `${path}${separator}${params.toString()}`
+  }
 
-  const storageKey = `${ID}:selected-deck:${workspaceRoot}`
+  // Selection is keyed by the *repository identity* the backend reports
+  // (`revisionData.repository_id`), not by `workspaceRoot` alone: two cwds
+  // can resolve to the same repository, and a repository can move cwd
+  // across reloads. Falls back to a workspaceRoot-scoped key before the
+  // first `/revision` response arrives so there is still a stable storage
+  // key to read/write from during the loading window.
+  const storageKeyFor = repoId => `${ID}:selected-deck:${repoId ?? `cwd:${workspaceRoot}`}`
 
   // Persisted selection per repository (ctx.storage mirrors localStorage
   // semantics for a plugin; falls back to the first deck on first run).
-  const [selectedPath, setSelectedPath] = useState(() => ctx?.storage?.get?.(storageKey) ?? null)
+  const [selectedPath, setSelectedPath] = useState(null)
   const [boardIndex, setBoardIndex] = useState(0)
   const [query, setQuery] = useState('')
   const [hoveredCard, setHoveredCard] = useState(null)
   const [pinnedCard, setPinnedCard] = useState(null)
   const [faceIndex, setFaceIndex] = useState(0)
+  // Tracks the last repository identity this component has reset state
+  // for, so a repository change (new repository_id OR a workspaceRoot
+  // switch before /revision resolves) is applied exactly once.
+  const [resetForKey, setResetForKey] = useState(null)
 
   // A cheap ~2s `/revision` poll stays authoritative so an out-of-band edit
   // (chat/file tooling, another window) always converges without a plugin
   // reload: polling drives invalidation of the list/detail queries below
   // instead of each of them polling the full scan/parse route directly.
-  const { data: revisionData } = useQuery({
+  const {
+    data: revisionData,
+    isLoading: revisionLoading,
+    isError: revisionIsError,
+    error: revisionError
+  } = useQuery({
     queryKey: [ID, 'revision', workspaceRoot],
     queryFn: () => ctx.rest(restQuery('/revision')),
     refetchInterval: 2000, // REVISION_POLL_MS -- cheap revision poll cadence (card t_f0bff516)
     enabled: Boolean(workspaceRoot)
   })
   const revision = revisionData?.revision ?? null
+  const repositoryId = revisionData?.repository_id ?? null
+  const resetKey = repositoryId ?? (workspaceRoot ? `cwd:${workspaceRoot}` : null)
 
   // Immediate refetch on focused-project change: a cwd switch gets its own
   // cache entry (queryKey includes workspaceRoot) instead of showing stale
@@ -1113,7 +1141,12 @@ function DeckLabPane({ ctx }) {
     [ctx]
   )
 
-  const { data: decksData } = useQuery({
+  const {
+    data: decksData,
+    isLoading: decksLoading,
+    isError: decksIsError,
+    error: decksError
+  } = useQuery({
     queryKey: [ID, 'decks', workspaceRoot],
     queryFn: () => ctx.rest(restQuery('/decks')),
     enabled: Boolean(workspaceRoot)
@@ -1121,11 +1154,42 @@ function DeckLabPane({ ctx }) {
   const decks = decksData?.decks ?? []
   const selectedSummary = decks.find(d => d.path === selectedPath) ?? null
 
+  // Reset/reload selection whenever the live repository identity changes
+  // (a different repo_id, OR -- before /revision has resolved -- a
+  // different workspaceRoot): reload that repository's saved selection,
+  // and clear board/pin/hover/face state so nothing from the previous
+  // root survives into the new one. Runs once per resetKey.
+  useEffect(() => {
+    if (resetKey === null || resetKey === resetForKey) return
+    const saved = ctx?.storage?.get?.(storageKeyFor(repositoryId)) ?? null
+    setSelectedPath(saved)
+    setBoardIndex(0)
+    setPinnedCard(null)
+    setHoveredCard(null)
+    setFaceIndex(0)
+    setResetForKey(resetKey)
+  }, [resetKey, resetForKey, repositoryId, ctx])
+
+  // Once the repository's deck list has loaded, select a valid first deck
+  // if there is no (or no longer valid) saved selection for this repo.
+  useEffect(() => {
+    if (resetForKey !== resetKey) return // wait for the reset effect above to run first
+    if (decks.length === 0) return
+    if (selectedPath && decks.some(d => d.path === selectedPath)) return
+    selectDeck(decks[0].path)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetForKey, resetKey, decks])
+
   // List rows are `DeckSummary` only (no `cards`/`categories`); the real
   // decklist body lives behind `/deck` and is fetched separately for just
   // the selected deck/board, keyed on both so switching boards or decks
   // gets its own cache entry.
-  const { data: deckDetail } = useQuery({
+  const {
+    data: deckDetail,
+    isLoading: deckDetailLoading,
+    isError: deckDetailIsError,
+    error: deckDetailError
+  } = useQuery({
     queryKey: [ID, 'deck', workspaceRoot, selectedPath, boardIndex],
     queryFn: () => {
       const boardPath = selectedSummary?.boards?.[boardIndex]?.path
@@ -1141,7 +1205,8 @@ function DeckLabPane({ ctx }) {
   // Rebuild the nested { name, path, cards, subcategories } shape
   // DecklistColumn/flattenCategories already expect, client-side.
   const activeBoard = deckDetail?.board ? { ...deckDetail.board, categories: buildCategoryTree(deckDetail.cards ?? []) } : null
-  const loadingBoard = Boolean(selectedPath) && Boolean(selectedSummary) && deckDetail === undefined
+  const loadingBoard = Boolean(selectedPath) && Boolean(selectedSummary) && (deckDetailLoading || deckDetail === undefined)
+  const boardError = Boolean(selectedPath) && Boolean(selectedSummary) && deckDetailIsError
   const selectedDeck = selectedSummary ? { ...selectedSummary, boards: selectedSummary.boards } : null
 
   const selectDeck = path => {
@@ -1149,7 +1214,7 @@ function DeckLabPane({ ctx }) {
     setBoardIndex(0)
     setPinnedCard(null)
     setFaceIndex(0)
-    ctx?.storage?.set?.(storageKey, path)
+    ctx?.storage?.set?.(storageKeyFor(repositoryId), path)
   }
 
   const onHoverPreview = card => {
@@ -1167,25 +1232,61 @@ function DeckLabPane({ ctx }) {
 
   const activeCard = pinnedCard ?? hoveredCard
 
+  // Repository-level loading/error/empty states: never collapse a network
+  // failure or a genuinely empty repository into the same "Select a deck"
+  // placeholder the picker shows for "nothing chosen yet".
+  const repositoryLoading = Boolean(workspaceRoot) && (revisionLoading || decksLoading) && !revisionIsError && !decksIsError
+  const repositoryErrored = revisionIsError || decksIsError
+  const repositoryEmpty = !repositoryLoading && !repositoryErrored && decksData !== undefined && decks.length === 0
+
+  let leftColumnBody
+  if (repositoryErrored) {
+    leftColumnBody = jsx('div', {
+      className: 'flex h-full flex-col items-center justify-center gap-1 p-4 text-center text-[0.75rem] text-destructive',
+      'data-testid': 'repository-error',
+      children: [
+        jsx('span', { children: 'Could not load this repository.' }),
+        jsx('span', { className: 'text-(--ui-text-quaternary)', children: String(revisionError?.message ?? decksError?.message ?? 'REQUEST_FAILED') })
+      ]
+    })
+  } else if (repositoryLoading) {
+    leftColumnBody = jsx('div', {
+      className: 'flex h-full items-center justify-center p-4 text-center text-[0.75rem] text-(--ui-text-quaternary)',
+      'data-testid': 'repository-loading',
+      children: 'Loading repository…'
+    })
+  } else if (repositoryEmpty) {
+    leftColumnBody = jsx('div', {
+      className: 'flex h-full items-center justify-center p-4 text-center text-[0.75rem] text-(--ui-text-quaternary)',
+      'data-testid': 'repository-empty',
+      children: 'No decks found in this repository.'
+    })
+  } else {
+    leftColumnBody = jsxs(Fragment, {
+      children: [
+        jsx('div', { className: 'shrink-0 p-2', children: jsx(DeckPicker, { decks, query, setQuery, selectedPath, onSelect: selectDeck }) }),
+        jsx(DecklistColumn, {
+          activeBoard,
+          boardError,
+          deck: selectedDeck,
+          boardIndex,
+          ctx,
+          loadingBoard,
+          onBoardChange: setBoardIndex,
+          onHoverPreview,
+          onPinToggle,
+          pinnedName: pinnedCard?.name ?? null
+        })
+      ]
+    })
+  }
+
   return jsxs('div', {
     className: 'flex h-full w-full',
     children: [
-      jsxs('div', {
+      jsx('div', {
         className: 'flex min-h-0 w-1/2 flex-col border-r border-(--ui-border)',
-        children: [
-          jsx('div', { className: 'shrink-0 p-2', children: jsx(DeckPicker, { decks, query, setQuery, selectedPath, onSelect: selectDeck }) }),
-          jsx(DecklistColumn, {
-            activeBoard,
-            deck: selectedDeck,
-            boardIndex,
-            ctx,
-            loadingBoard,
-            onBoardChange: setBoardIndex,
-            onHoverPreview,
-            onPinToggle,
-            pinnedName: pinnedCard?.name ?? null
-          })
-        ]
+        children: leftColumnBody
       }),
       jsx('div', {
         className: 'min-h-0 w-1/2',

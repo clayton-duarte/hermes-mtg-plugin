@@ -13,3 +13,9 @@ tools:
   - deck_validate
   - deck_import
   - deck_export
+provides_tools:
+  - deck_list
+  - deck_get
+  - deck_validate
+  - deck_import
+  - deck_export
