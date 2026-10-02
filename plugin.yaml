@@ -7,3 +7,9 @@ schemas:
   deck: hermes-mtg/deck/v1
   board: hermes-mtg/board/v1
   service: hermes-mtg/service/v1
+tools:
+  - deck_list
+  - deck_get
+  - deck_validate
+  - deck_import
+  - deck_export

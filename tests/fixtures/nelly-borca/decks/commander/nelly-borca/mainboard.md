@@ -23,16 +23,20 @@ description: Active Commander list
 #### Lands
 
 ```decklist
-13 Plains
 11 Mountain
-1 Command Tower
+13 Plains
 1 Battlefield Forge
-1 Sacred Foundry
+1 Boros Garrison
 1 Clifftop Retreat
-1 Temple of Triumph
-1 Mountain Valley
-1 Needleverge Pathway
+1 Command Tower
+1 Exotic Orchard
+1 Furycalm Snarl
 1 Rugged Prairie
+1 Sacred Peaks
+1 Sunscorched Divide
+1 Labyrinth of Skophos
+1 Rogue's Passage
+1 Reliquary Tower
 ```
 
 #### Ramp
@@ -41,9 +45,26 @@ description: Active Commander list
 1 Sol Ring
 1 Arcane Signet
 1 Boros Signet
-1 Mind Stone
+1 Talisman of Conviction
 1 Fellwar Stone
+1 Everflowing Chalice
+1 Liquimetal Torque
 1 Thought Vessel
+1 Wayfarer's Bauble
+1 Knight of the White Orchid
+1 Loyal Warhound
+1 Keeper of the Accord
+```
+
+#### Card Advantage
+
+```decklist
+1 Cut a Deal
+1 Secret Rendezvous
+1 Joined Researchers // Secret Rendezvous
+1 Tenuous Truce
+1 Key to the City
+1 Mangara, the Diplomat
 ```
 
 #### Interaction
@@ -51,12 +72,36 @@ description: Active Commander list
 ##### Removal
 
 ```decklist
-1 Swords to Plowshares
 1 Path to Exile
+1 Swords to Plowshares
+1 Erode
 1 Generous Gift
 1 Chaos Warp
-1 Fire Covenant
-1 Vandalblast
+1 Loran of the Third Path
+1 Requisition Raid
+```
+
+##### Wipes
+
+```decklist
+1 Blasphemous Act
+1 Chain Reaction
+1 Promise of Loyalty
+```
+
+##### Protection & Reflection
+
+```decklist
+1 Comeuppance
+1 Deflecting Palm
+1 Take the Bait
+1 Selfless Squire
+1 Your Temple Is Under Attack
+1 Redirect Lightning
+1 Reconnaissance
+1 Lightning Greaves
+1 Swiftfoot Boots
+1 Brotherhood Regalia
 ```
 
 ### Gameplan
@@ -65,58 +110,38 @@ description: Active Commander list
 
 ```decklist
 1 Agitator Ant
+1 Agrus Kos, Spirit of Justice
+1 Alexios, Deimos of Kosmos
+1 Bloodthirsty Blade
 1 Disrupt Decorum
-1 Mind Games
-1 Monologue Tax
-1 Scythe Specter
-1 Combat Celebrant
-1 Goldspan Dragon
-1 Terror of the Peaks
-1 Anger
-1 Light Up the Stage
-1 Thrill of Possibility
-1 Faithless Looting
-1 Wheel of Fortune
-1 Reforge the Soul
-1 Jaya Ballard
-1 Chandra, Torch of Defiance
-1 Hazoret the Fervent
-1 Zealous Conscripts
-1 Blasphemous Act
-1 Comet Storm
-1 Fireblast
-1 Lightning Bolt
-1 Lightning Strike
-1 Abrade
-1 Shivan Fire
-1 Skewer the Critics
-1 Inspiring Vantage
-1 Boros Garrison
-1 Sunbaked Canyon
-1 Needle Spires
-1 Wooded Foothills
-1 Nahiri, the Harbinger
-1 Winota, Joiner of Forces
-1 Depala, Pilot Exemplar
-1 Feldon of the Third Path
-1 Combat Thresher
-1 Open the Armory
-1 Steelshaper's Gift
-1 Stoneforge Mystic
-1 Sword of Fire and Ice
-1 Sword of Feast and Famine
-1 Lightning Greaves
-1 Swiftfoot Boots
-1 Skullclamp
-1 Mask of Memory
-1 Esper Sentinel
-1 Smothering Tithe
-1 Rhythm of the Wild
-1 Fires of Yavimaya
-1 Urabrask the Hidden
-1 Etali, Primal Storm
-1 Krenko, Mob Boss
-1 Purphoros, God of the Forge
-1 Impact Tremors
-1 Goblin Bombardment
+1 Geode Rager
+1 Hot Pursuit
+1 Martial Impetus
+1 Shiny Impetus
+1 Taunt from the Rampart
+1 The Sound of Drums
+1 Vengeful Ancestor
+```
+
+#### Enablers — The Funnel
+
+```decklist
+1 Kazuul, Tyrant of the Cliffs
+1 Nils, Discipline Enforcer
+1 Noble Heritage
+1 War Cadence
+1 Duelist's Heritage
+1 Curse of Opulence
+```
+
+#### Payoffs — Damage Conversion & Finishers
+
+```decklist
+1 Brash Taunter
+1 Stuffy Doll
+1 Truefire Captain
+1 Arcbond
+1 Gisela, Blade of Goldnight
+1 Aurelia, the Law Above
+1 Insurrection
 ```
