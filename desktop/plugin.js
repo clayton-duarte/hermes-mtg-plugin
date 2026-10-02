@@ -1047,7 +1047,7 @@ function DeckLabPane({ ctx }) {
   useEffect(
     () =>
       ctx.onEvent('tool.complete', event => {
-        if (event?.name === 'deck_import') {
+        if (event?.payload?.name === 'deck_import') {
           qc.invalidateQueries({ queryKey: [ID, 'decks'] })
         }
       }),

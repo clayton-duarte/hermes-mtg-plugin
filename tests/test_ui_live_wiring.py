@@ -64,3 +64,21 @@ def test_no_hand_rolled_timers_leak_past_component_unmount():
         "hand-rolled setInterval found; use useQuery's refetchInterval "
         "(owned/cleared by the shared QueryClient) instead"
     )
+
+
+def test_tool_complete_handler_reads_the_tool_name_from_the_payload():
+    # GatewayEvent<'tool.complete'> wraps the real ToolCompletePayload under
+    # `.payload` (see apps/shared/src/gateway-events.ts GatewayEvent<K> and
+    # ToolCompletePayload.name in gateway-contract.generated.ts) -- the top
+    # level event object has no `name` field of its own. Reading `event.name`
+    # is always undefined and the deck_import invalidation never fires.
+    src = _source()
+    assert "event?.payload?.name === 'deck_import'" in src, (
+        "expected the tool.complete handler to read the tool name from "
+        "event.payload.name (the GatewayEvent<'tool.complete'> contract), "
+        "not event.name"
+    )
+    assert re.search(r"event\?\.name\s*===\s*'deck_import'", src) is None, (
+        "tool.complete handler still reads event.name directly; "
+        "GatewayEvent has no top-level name field, only event.payload.name"
+    )
