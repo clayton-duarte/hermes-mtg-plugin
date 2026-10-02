@@ -37,6 +37,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from deck_lab.runtime import build_service
 from deck_lab.service import DeckLabService, DeckLabServiceError
 
 router = APIRouter()
@@ -61,7 +62,7 @@ def _workspace_root(workspace_root: Optional[str] = None) -> Path:
 
 
 def _service(workspace_root: Optional[str] = None) -> DeckLabService:
-    return DeckLabService(_workspace_root(workspace_root))
+    return build_service(_workspace_root(workspace_root))
 
 
 def _error_response(exc: DeckLabServiceError) -> JSONResponse:
