@@ -32,7 +32,10 @@ def test_scan_repository_reports_invalid_deck_with_bad_frontmatter(tmp_path):
     decks = scan_repository(tmp_path / "decks")
     match = next(d for d in decks if d.path == "decks/commander/broken-deck")
     assert match.valid is False
-    assert "DECK_FRONTMATTER_MISSING" in match.errors
+    assert "DECK_FRONTMATTER_MISSING" in [e.code for e in match.errors]
+    diag = next(e for e in match.errors if e.code == "DECK_FRONTMATTER_MISSING")
+    assert diag.path == "decks/commander/broken-deck"
+    assert diag.severity == "error"
 
 
 def test_scan_repository_reports_missing_board_deck(tmp_path):
@@ -46,7 +49,7 @@ def test_scan_repository_reports_missing_board_deck(tmp_path):
     decks = scan_repository(tmp_path / "decks")
     match = next(d for d in decks if d.path == "decks/commander/no-board-deck")
     assert match.valid is False
-    assert "BOARD_FRONTMATTER_MISSING" in match.errors
+    assert "BOARD_FRONTMATTER_MISSING" in [e.code for e in match.errors]
     assert match.boards == ()
 
 

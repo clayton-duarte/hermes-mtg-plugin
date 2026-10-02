@@ -1,4 +1,4 @@
-"""Repository scanner and revision model (t_eb91eeab).
+"""Repository scanner and revision model (t_eb91eeab, corrected t_8bef6d29).
 
 Discovers deck repositories laid out as `<decks_root>/<format>/<deck>/README.md`,
 classifies each deck as valid / invalid / missing-board, and provides a cheap
@@ -24,12 +24,13 @@ from deck_lab.models import (
     COLOR_IDENTITY_VALUES,
     BoardSummary,
     DeckSummary,
+    ValidationError,
 )
 
 README_NAME = "README.md"
 
 # Directories excluded from both board discovery and the revision fingerprint.
-EXCLUDED_DIR_NAMES = frozenset({"cache", "images", ".git"})
+EXCLUDED_DIR_NAMES = frozenset({"cache", "images", "research", ".git"})
 
 
 def _split_frontmatter(text: str) -> tuple[Optional[dict], str]:
@@ -69,7 +70,66 @@ def _resolve_within(root: Path, candidate: Path) -> Optional[Path]:
     return resolved
 
 
-def _is_board_markdown(path: Path) -> Optional[dict]:
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and value.strip() != ""
+
+
+def _is_strict_int(value: object) -> bool:
+    """True for a real int, excluding bool (bool is an int subclass)."""
+
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _board_diagnostics(path: Path, rel_path: str, frontmatter: Optional[dict]) -> list[ValidationError]:
+    """Validate strict board frontmatter. Returns a list of diagnostics; an
+    empty list means the board is valid."""
+
+    if frontmatter is None:
+        return [
+            ValidationError(
+                code="BOARD_FRONTMATTER_MISSING",
+                message="Board markdown has no recognizable frontmatter block.",
+                path=rel_path,
+            )
+        ]
+    diagnostics: list[ValidationError] = []
+    if frontmatter.get("schema") != BOARD_SCHEMA_V1:
+        diagnostics.append(
+            ValidationError(
+                code="BOARD_SCHEMA_UNSUPPORTED",
+                message=f"Board schema must be {BOARD_SCHEMA_V1!r}.",
+                path=rel_path,
+            )
+        )
+        return diagnostics
+    if not _is_nonempty_str(frontmatter.get("name")):
+        diagnostics.append(
+            ValidationError(
+                code="BOARD_FRONTMATTER_INVALID",
+                message="Board frontmatter 'name' must be a non-empty string.",
+                path=rel_path,
+            )
+        )
+    if frontmatter.get("kind") not in BOARD_KINDS:
+        diagnostics.append(
+            ValidationError(
+                code="BOARD_KIND_INVALID",
+                message=f"Board 'kind' must be one of {BOARD_KINDS!r}.",
+                path=rel_path,
+            )
+        )
+    if not _is_strict_int(frontmatter.get("order")):
+        diagnostics.append(
+            ValidationError(
+                code="BOARD_FRONTMATTER_INVALID",
+                message="Board frontmatter 'order' must be an integer (not a boolean).",
+                path=rel_path,
+            )
+        )
+    return diagnostics
+
+
+def _is_board_markdown(path: Path, rel_path: str) -> Optional[dict]:
     """Return the frontmatter dict if `path` is recognized as strict board
     schema markdown, else None. Reads only the file's frontmatter region by
     parsing the whole file but never touches the decklist parser -- no card
@@ -80,33 +140,116 @@ def _is_board_markdown(path: Path) -> Optional[dict]:
     except OSError:
         return None
     frontmatter, _ = _split_frontmatter(text)
-    if frontmatter is None:
-        return None
-    if frontmatter.get("schema") != BOARD_SCHEMA_V1:
-        return None
-    if frontmatter.get("kind") not in BOARD_KINDS:
-        return None
-    if not isinstance(frontmatter.get("order"), int):
+    if _board_diagnostics(path, rel_path, frontmatter):
         return None
     return frontmatter
 
 
-def _deck_frontmatter_errors(frontmatter: Optional[dict]) -> list[str]:
+def _deck_frontmatter_diagnostics(
+    rel_path: str, frontmatter: Optional[dict]
+) -> tuple[list[ValidationError], dict]:
+    """Validate deck frontmatter. Returns (diagnostics, sanitized_fields) where
+    sanitized_fields always holds values safe to pass into DeckSummary (never
+    raises from DeckSummary construction, even when the source is invalid)."""
+
+    sanitized = {
+        "name": "",
+        "format": "unknown",
+        "color_identity": (),
+        "status": "unknown",
+    }
+
     if frontmatter is None:
-        return ["DECK_FRONTMATTER_MISSING"]
+        return (
+            [
+                ValidationError(
+                    code="DECK_FRONTMATTER_MISSING",
+                    message="Deck README has no recognizable frontmatter block.",
+                    path=rel_path,
+                )
+            ],
+            sanitized,
+        )
+
     if frontmatter.get("schema") != DECK_SCHEMA_V1:
-        return ["DECK_SCHEMA_UNSUPPORTED"]
-    errors = []
-    for field in ("name", "format", "status"):
-        if not frontmatter.get(field):
-            errors.append("DECK_FRONTMATTER_INVALID")
-            break
-    color_identity = frontmatter.get("color_identity") or []
-    if not isinstance(color_identity, list) or any(
-        c not in COLOR_IDENTITY_VALUES for c in color_identity
-    ):
-        errors.append("DECK_FRONTMATTER_INVALID")
-    return errors
+        return (
+            [
+                ValidationError(
+                    code="DECK_SCHEMA_UNSUPPORTED",
+                    message=f"Deck schema must be {DECK_SCHEMA_V1!r}.",
+                    path=rel_path,
+                )
+            ],
+            sanitized,
+        )
+
+    diagnostics: list[ValidationError] = []
+
+    name = frontmatter.get("name")
+    if _is_nonempty_str(name):
+        sanitized["name"] = name
+    else:
+        diagnostics.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message="Deck frontmatter 'name' must be a non-empty string.",
+                path=rel_path,
+            )
+        )
+
+    fmt = frontmatter.get("format")
+    if _is_nonempty_str(fmt) and fmt == fmt.lower():  # type: ignore[union-attr]
+        sanitized["format"] = fmt
+    else:
+        diagnostics.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message="Deck frontmatter 'format' must be a non-empty lowercase string.",
+                path=rel_path,
+            )
+        )
+
+    status = frontmatter.get("status")
+    if _is_nonempty_str(status) and status == status.lower():  # type: ignore[union-attr]
+        sanitized["status"] = status
+    else:
+        diagnostics.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message="Deck frontmatter 'status' must be a non-empty lowercase string.",
+                path=rel_path,
+            )
+        )
+
+    color_identity = frontmatter.get("color_identity")
+    if not isinstance(color_identity, list) or not color_identity:
+        diagnostics.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message="Deck frontmatter 'color_identity' must be a non-empty list.",
+                path=rel_path,
+            )
+        )
+    elif any(c not in COLOR_IDENTITY_VALUES for c in color_identity):
+        diagnostics.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message=f"Deck 'color_identity' members must be one of {sorted(COLOR_IDENTITY_VALUES)!r}.",
+                path=rel_path,
+            )
+        )
+    elif len(set(color_identity)) != len(color_identity):
+        diagnostics.append(
+            ValidationError(
+                code="DECK_FRONTMATTER_INVALID",
+                message="Deck 'color_identity' must not contain duplicate colors.",
+                path=rel_path,
+            )
+        )
+    else:
+        sanitized["color_identity"] = tuple(color_identity)
+
+    return diagnostics, sanitized
 
 
 def scan_repository(decks_root: Path) -> list[DeckSummary]:
@@ -125,68 +268,79 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
     summaries: list[DeckSummary] = []
 
     for format_dir in sorted(p for p in root_resolved.iterdir() if p.is_dir()):
-        if _resolve_within(root_resolved, format_dir) is None:
+        if format_dir.name in EXCLUDED_DIR_NAMES:
             continue
-        format_name = format_dir.name
+        format_resolved = _resolve_within(root_resolved, format_dir)
+        if format_resolved is None:
+            continue
+        format_name = format_resolved.name
 
-        for deck_dir in sorted(p for p in format_dir.iterdir() if p.is_dir()):
+        for deck_dir in sorted(p for p in format_resolved.iterdir() if p.is_dir()):
             if deck_dir.name in EXCLUDED_DIR_NAMES:
                 continue
             deck_resolved = _resolve_within(root_resolved, deck_dir)
             if deck_resolved is None:
                 continue  # traversal or symlink escape -- skip silently
 
-            readme_path = deck_dir / README_NAME
+            readme_path = deck_resolved / README_NAME
             if not readme_path.is_file():
                 continue
-            if _resolve_within(root_resolved, readme_path) is None:
+            readme_resolved = _resolve_within(root_resolved, readme_path)
+            if readme_resolved is None:
                 continue
 
-            rel_path = f"decks/{deck_dir.relative_to(decks_root).as_posix()}"
+            rel_path = f"decks/{deck_resolved.relative_to(root_resolved).as_posix()}"
 
             try:
-                readme_text = readme_path.read_text()
+                readme_text = readme_resolved.read_text()
             except OSError:
                 readme_text = ""
             deck_frontmatter, _ = _split_frontmatter(readme_text)
-            deck_errors = _deck_frontmatter_errors(deck_frontmatter)
+            deck_diagnostics, sanitized = _deck_frontmatter_diagnostics(rel_path, deck_frontmatter)
 
             boards: list[BoardSummary] = []
-            for candidate in sorted(deck_dir.glob("*.md")):
+            for candidate in sorted(deck_resolved.glob("*.md")):
                 if candidate.name == README_NAME:
                     continue
-                if _resolve_within(root_resolved, candidate) is None:
+                candidate_resolved = _resolve_within(root_resolved, candidate)
+                if candidate_resolved is None:
                     continue
-                board_fm = _is_board_markdown(candidate)
+                board_rel = f"decks/{candidate_resolved.relative_to(root_resolved).as_posix()}"
+                board_fm = _is_board_markdown(candidate_resolved, board_rel)
                 if board_fm is None:
                     continue
-                board_rel = f"decks/{candidate.relative_to(decks_root).as_posix()}"
                 boards.append(
                     BoardSummary(
                         path=board_rel,
-                        name=board_fm.get("name", candidate.stem),
+                        name=board_fm.get("name", candidate_resolved.stem),
                         kind=board_fm["kind"],
                         order=board_fm["order"],
                         valid=True,
                     )
                 )
 
-            deck_errors_tuple = list(deck_errors)
+            deck_diagnostics_all = list(deck_diagnostics)
             if not boards:
-                deck_errors_tuple.append("BOARD_FRONTMATTER_MISSING")
+                deck_diagnostics_all.append(
+                    ValidationError(
+                        code="BOARD_FRONTMATTER_MISSING",
+                        message="Deck has no recognizable board markdown.",
+                        path=rel_path,
+                    )
+                )
 
-            valid = not deck_errors_tuple
+            valid = not deck_diagnostics_all
 
             summaries.append(
                 DeckSummary(
                     repository_id=str(root_resolved),
                     path=rel_path,
-                    name=(deck_frontmatter or {}).get("name", deck_dir.name),
-                    format=(deck_frontmatter or {}).get("format", format_name),
-                    color_identity=tuple((deck_frontmatter or {}).get("color_identity") or ()),
-                    status=(deck_frontmatter or {}).get("status", "unknown"),
+                    name=sanitized["name"] or deck_resolved.name,
+                    format=sanitized["format"] if sanitized["format"] != "unknown" else format_name,
+                    color_identity=sanitized["color_identity"],
+                    status=sanitized["status"],
                     valid=valid,
-                    errors=tuple(deck_errors_tuple),
+                    errors=tuple(deck_diagnostics_all),
                     boards=tuple(boards),
                 )
             )
@@ -194,24 +348,31 @@ def scan_repository(decks_root: Path) -> list[DeckSummary]:
     return summaries
 
 
-def _iter_revision_files(decks_root: Path):
-    """Yield README/board markdown paths under decks_root, excluding
-    cache/image directories, without parsing any decklist content."""
+def _iter_revision_files(root_resolved: Path):
+    """Yield README/board markdown paths directly under
+    `<root>/<format>/<deck>/`, pruned: never descends into excluded
+    directories (cache/images/research/.git) nor any nested subdirectory
+    beyond the deck directory itself, and never parses file content."""
 
-    decks_root = Path(decks_root)
-    try:
-        root_resolved = decks_root.resolve(strict=False)
-    except OSError:
-        return
-    if not root_resolved.is_dir():
-        return
+    for format_dir in sorted(p for p in root_resolved.iterdir() if p.is_dir()):
+        if format_dir.name in EXCLUDED_DIR_NAMES:
+            continue
+        format_resolved = _resolve_within(root_resolved, format_dir)
+        if format_resolved is None:
+            continue
 
-    for path in sorted(root_resolved.rglob("*.md")):
-        if any(part in EXCLUDED_DIR_NAMES for part in path.relative_to(root_resolved).parts):
-            continue
-        if _resolve_within(root_resolved, path) is None:
-            continue
-        yield path
+        for deck_dir in sorted(p for p in format_resolved.iterdir() if p.is_dir()):
+            if deck_dir.name in EXCLUDED_DIR_NAMES:
+                continue
+            deck_resolved = _resolve_within(root_resolved, deck_dir)
+            if deck_resolved is None:
+                continue
+
+            for candidate in sorted(deck_resolved.glob("*.md")):
+                candidate_resolved = _resolve_within(root_resolved, candidate)
+                if candidate_resolved is None:
+                    continue
+                yield candidate_resolved
 
 
 def compute_revision(decks_root: Path) -> str:
@@ -220,10 +381,15 @@ def compute_revision(decks_root: Path) -> str:
     parses cards, so this stays sub-two-second even on large repositories."""
 
     decks_root = Path(decks_root)
-    root_resolved = decks_root.resolve(strict=False) if decks_root.exists() else decks_root
+    try:
+        root_resolved = decks_root.resolve(strict=False)
+    except OSError:
+        return hashlib.sha256().hexdigest()
+    if not root_resolved.is_dir():
+        return hashlib.sha256().hexdigest()
 
     digest = hashlib.sha256()
-    for path in _iter_revision_files(decks_root):
+    for path in _iter_revision_files(root_resolved):
         try:
             stat = path.stat()
         except OSError:
