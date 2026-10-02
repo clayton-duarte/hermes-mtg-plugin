@@ -136,32 +136,36 @@ export async function connect(wsUrl) {
   // descendant (not BUTTON, not `[role=separator]`), so the click reaches
   // the row's own onClick (pin toggle) instead of stopPropagation'd or
   // unrelated UI.
+  // Clicks the row-group element's OWN node directly (not its descendant
+  // name/pin <button>s) by dispatching real bubbling MouseEvents at the
+  // element itself -- not a coordinate-based elementFromPoint click, which
+  // proved unreliable in this dev harness (the chat-composer surface
+  // sometimes hit-tests above the deck-lab pane's painted pixels due to the
+  // app's own CSS zoom). React's root-delegated listeners still fire
+  // correctly for a bubbling event dispatched on the row node, so this
+  // genuinely exercises the row's own onClick (CardRow.onRowActivate /
+  // onPinToggle), not the pin-icon button and not the name button.
   async function clickRowBackground(rowSelectorExpr) {
-    const rect = await evalJs(`
+    await evalJs(`
       (() => {
         const el = ${rowSelectorExpr}
-        if (!el) return null
-        el.scrollIntoView({ block: 'center', inline: 'nearest' })
-        const r = el.getBoundingClientRect()
-        return { x: r.x, y: r.y, width: r.width, height: r.height }
+        if (el) el.scrollIntoView({ block: 'center', inline: 'nearest' })
       })()
     `)
-    if (!rect) throw new Error(`clickRowBackground: no box model for ${rowSelectorExpr}`)
-    const candidateOffsets = [10, 6, rect.width - 8, rect.width * 0.5, rect.width * 0.3]
-    for (const dx of candidateOffsets) {
-      const px = rect.x + dx
-      const py = rect.y + rect.height / 2
-      // eslint-disable-next-line no-await-in-loop
-      const tag = await evalJs(`document.elementFromPoint(${px}, ${py})?.tagName ?? null`)
-      // eslint-disable-next-line no-await-in-loop
-      const role = await evalJs(`document.elementFromPoint(${px}, ${py})?.getAttribute?.('role') ?? null`)
-      if (tag && tag !== 'BUTTON' && role !== 'separator') {
-        await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: px, y: py, button: 'left', clickCount: 1 })
-        await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: px, y: py, button: 'left', clickCount: 1 })
-        return { x: px, y: py, tag, role }
-      }
-    }
-    throw new Error(`clickRowBackground: no safe click point found for ${rowSelectorExpr}`)
+    await sleep(150)
+    const dispatched = await evalJs(`
+      (() => {
+        const row = ${rowSelectorExpr}
+        if (!row) return false
+        const opts = { bubbles: true, cancelable: true, view: window, button: 0 }
+        row.dispatchEvent(new MouseEvent('mousedown', opts))
+        row.dispatchEvent(new MouseEvent('mouseup', opts))
+        row.dispatchEvent(new MouseEvent('click', opts))
+        return true
+      })()
+    `)
+    if (!dispatched) throw new Error(`clickRowBackground: row not found for ${rowSelectorExpr}`)
+    return { dispatched: true }
   }
 
   // Real keyboard Tab presses via CDP Input.dispatchKeyEvent, moving focus

@@ -161,6 +161,21 @@ async function main() {
     pinnedAfterFirstClick, titlePinned, pinnedAfterSecondClick
   })
 
+  // 3b. Row background click/tap (CardRow.onClick / onRowActivate) also
+  //     pins/unpins directly, without going through the dedicated pin icon
+  //     button -- restores coverage of the row-level click/tap pin path per
+  //     architect correction.
+  await d.clickRowBackground(rowSelector('Sol Ring'))
+  await d.sleep(400)
+  const pinnedAfterRowBackgroundClick = await previewPinned()
+  const titlePinnedViaRowBackground = await previewTitle()
+  await d.clickRowBackground(rowSelector('Sol Ring'))
+  await d.sleep(400)
+  const unpinnedAfterSecondRowBackgroundClick = await previewPinned()
+  check('row_background_click_pins_and_unpins', pinnedAfterRowBackgroundClick === true && titlePinnedViaRowBackground === 'Sol Ring' && unpinnedAfterSecondRowBackgroundClick === false, {
+    pinnedAfterRowBackgroundClick, titlePinnedViaRowBackground, unpinnedAfterSecondRowBackgroundClick
+  })
+
   // 4. Hovering another card while pinned does not replace preview.
   await d.clickElement(pinButtonSelector('Sol Ring'))
   await d.sleep(400)
@@ -348,11 +363,12 @@ async function main() {
       return {
         hasHeading: text.includes('This deck is invalid.'),
         hasCode: text.includes('CARD_QUANTITY_INVALID'),
-        hasMessage: text.includes('Quantity must be a positive integer')
+        hasMessage: text.includes('Quantity must be a positive integer'),
+        hasPath: text.includes('tests/fixtures/malformed/card_quantity_invalid_zero.md')
       }
     })()
   `)
-  check('invalid_candidate_diagnostics_shown', invalidDiagnostics.hasHeading && invalidDiagnostics.hasCode && invalidDiagnostics.hasMessage, invalidDiagnostics)
+  check('invalid_candidate_diagnostics_shown', invalidDiagnostics.hasHeading && invalidDiagnostics.hasCode && invalidDiagnostics.hasMessage && invalidDiagnostics.hasPath, invalidDiagnostics)
 
   // Re-select Nelly for the remaining checks (long-name truncation measured
   // against the real decklist DOM).

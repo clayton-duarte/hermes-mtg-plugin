@@ -867,7 +867,7 @@ function DecklistColumn({ boardIndex, ctx, deck, onBoardChange, onHoverPreview, 
       children: [
         jsx('div', { className: 'font-semibold text-destructive', children: 'This deck is invalid.' }),
         deck.errors.map((error, index) =>
-          jsxs('div', { key: index, className: 'text-(--ui-text-tertiary)', children: [error.code, ': ', error.message] })
+          jsxs('div', { key: index, className: 'text-(--ui-text-tertiary)', children: [error.code, ': ', error.message, ' (', error.path, ')'] })
         )
       ]
     })
