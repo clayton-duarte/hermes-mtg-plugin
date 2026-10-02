@@ -4,11 +4,10 @@ name: Krenko Goblins
 format: commander
 color_identity: [R]
 status: built
----
-
 tags:
   - aggro
   - tokens
+---
 
 # Krenko Goblins
 

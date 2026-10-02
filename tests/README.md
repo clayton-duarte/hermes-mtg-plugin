@@ -1,19 +1,16 @@
 # Running the test suite
 
 ```
-pytest tests/ -q
+PYTHONPATH=. uv run --with pytest --with fastapi --with httpx \
+  --with 'ruamel.yaml' --with pyyaml --with python-multipart \
+  --with psutil --with python-dotenv pytest -q tests/
 ```
 
-Requires `PyYAML`, `fastapi`, and `pytest` importable (see `docs/INSTALL.md`
-for a profile-safe install, or `pip install PyYAML fastapi pytest` into any
-throwaway virtualenv with this repo installed in editable mode:
-`pip install -e .`).
-
-Expected: all tests pass except tests that require packages not installed
-in your interpreter (e.g. `test_plugin_api_imports_standalone_from_neutral_cwd_and_pythonpath`
-needs `fastapi` importable in a *subprocess* with no `PYTHONPATH` set — make
-sure `fastapi` is installed in the same interpreter running pytest, not only
-on `PYTHONPATH`).
+This dependency-isolated command is the acceptance path used by maintainers;
+it also makes `fastapi` and Hermes' YAML support available to subprocess tests.
+See `docs/INSTALL.md` for profile-safe plugin validation. The suite is expected
+to finish with no failures or errors (platform-specific tests may skip when
+their external host surface is unavailable).
 
 ## Lane map
 

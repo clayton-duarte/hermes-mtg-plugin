@@ -1,11 +1,11 @@
 # Minimal compatible repository example
 
-One commander deck, one board (`mainboard.md`), 24 cards (23 + commander).
+One commander deck, one board (`mainboard.md`), 25 cards (24 + commander).
 Validates clean with no network access:
 
 ```
 $ cd hermes-mtg-plugin
-$ python3 -c "
+$ PYTHONPATH=. uv run --with pyyaml python -c "
 import sys; sys.path.insert(0, '.')
 from deck_lab.service import DeckLabService
 import json

@@ -55,7 +55,9 @@ YAML frontmatter:
 | `description` | string | no | |
 
 Body structure: `## Zone` → `### Category` → one or more fenced
-` ```decklist ` blocks of `<qty> <card name> [(SET) [collector-number]]` rows.
+` ```decklist ` blocks. A row is either `<qty> <card name>` or
+`<qty> <card name> (SET) collector-number`; set and collector coordinates must
+be supplied together.
 
 Allowed H2 zones per `kind`:
 
@@ -67,7 +69,7 @@ Allowed H2 zones per `kind`:
 
 A zone may appear at most once per board (`ZONE_DUPLICATE` otherwise). A
 category heading is required directly under a zone before any `decklist`
-fence (`CATEGORY_LEVEL_SKIPPED`/`DECKLIST_FENCE_NO_CATEGORY` otherwise).
+fence (`CATEGORY_LEVEL_SKIPPED` otherwise).
 
 ## Validation error codes
 
@@ -155,18 +157,20 @@ relative.
 concept — exporting Markdown with categories drops them
 (`losses: ["categories are not representable in ManaBox/Arena plain text..."]`).
 
-`moxfield-bulk`: `<qty> <name> [(SET) <#>] [*finish*] [#category]` rows.
-Category round-trips as a `#tag`; finish markers are stripped on import
-(no per-copy finish field in the Deck Lab model) and any loss is reported
-in `export_deck`'s `losses` list.
+`moxfield-bulk`: `<qty> <name> [(SET) <#>] [*provider-marker*]` rows.
+Non-default categories are not representable and are reported in
+`export_deck.losses`. Finish/language markers are accepted but stripped on
+import (no per-copy finish/language field in the Deck Lab model), with a
+warning for each normalized marker.
 
 ## Minimal compatible example
 
 `examples/minimal-repo/decks/commander/krenko-goblins/` — one deck, one
-board, 24 cards. Validates clean:
+board, 25 cards (24 in the Deck zone plus one commander). Validates clean:
 
 ```
-$ python -c "from deck_lab.service import DeckLabService; import json; \
+$ PYTHONPATH=. uv run --with pyyaml python -c \
+  "from deck_lab.service import DeckLabService; import json; \
   print(json.dumps(DeckLabService('examples/minimal-repo').validate('decks', resolve_remote=False)))"
 {"schema": "hermes-mtg/service/v1", "target": "decks", "valid": true,
  "deck_count": 1, "valid_count": 1, "invalid_count": 0, "errors": [],

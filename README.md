@@ -2,10 +2,10 @@
 
 Deck Lab manages Magic: The Gathering decks as a plain Markdown + YAML
 repository, inside your normal project folder, instead of locking your
-decklists into a web app or a bespoke binary format. Hermes (CLI tools and
-agents) and the desktop Deck Lab pane both read and write the exact same
-`decks/` tree, so an agent edit, a hand edit, and the live pane view can never
-drift from one another.
+decklists into a web app or a bespoke binary format. Hermes tools and agents
+read and write the repository's `decks/` tree; the desktop Deck Lab pane reads
+that same tree through the shared service. An agent edit, a hand edit, and the
+live read-only pane therefore cannot drift into separate data models.
 
 - **Why**: decks are source-controllable text. Validation errors point at an
   exact file and line. Tools that read/write decks (`deck_list`, `deck_get`,
@@ -18,9 +18,8 @@ drift from one another.
 ## Quick start
 
 ```
-git clone https://github.com/clayton-duarte/hermes-mtg-plugin.git
-cd hermes-mtg-plugin
-HERMES_HOME=/path/to/disposable/profile hermes plugins install . --enable
+HERMES_HOME=/path/to/disposable/profile hermes plugins install \
+  https://github.com/clayton-duarte/hermes-mtg-plugin.git --enable
 ```
 
 See `docs/INSTALL.md` for the profile-safe verification flow, independent
@@ -45,8 +44,8 @@ code, and tool signature. This README does not repeat it.
 - **Read/validate/import/export only** — there is no deckbuilding UI, no
   deck optimizer, no format legality checker.
 - **One repository, one `decks/` root** — no multi-repository federation.
-- **Scryfall enrichment is best-effort** — `deck_get`/`deck_validate
-  (resolve_remote=true)` attach cached or live Scryfall projections, but an
+- **Scryfall enrichment is best-effort** — `deck_get`/`deck_validate`
+  with `resolve_remote=true` attach cached or live Scryfall projections, but an
   unresolved card is a warning (`REMOTE_CARD_UNRESOLVED`), never a hard
   validation failure; the canonical source of truth is always the Markdown,
   not the network.
@@ -55,12 +54,13 @@ code, and tool signature. This README does not repeat it.
   and vice versa:
   - Markdown → ManaBox/Arena: **categories are dropped** (ManaBox/Arena has
     no category concept).
-  - Markdown → Moxfield-bulk: category survives as a `#tag`, but finish
-    markers (`*F*`, `*E*`, ...) round-trip only as provider-only markers
-    Deck Lab strips back out on import (Deck Lab has no per-copy finish
-    field).
-  - Any import/export `losses` list in the tool/route response enumerates
-    exactly what did not survive — never silently.
+  - Markdown → Moxfield-bulk: non-default categories are dropped because the
+    supported bulk-text dialect has no category column.
+  - Moxfield provider-only finish/language markers (`*F*`, `*E*`,
+    `*Japanese*`, ...) are normalized away on import because Deck Lab has no
+    canonical per-copy finish/language field.
+  - Import/export responses report known losses through `losses` or
+    `warnings`; they are not silently retained as canonical card data.
 
 ## Tools (agent-facing)
 
