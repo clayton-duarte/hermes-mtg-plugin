@@ -22,6 +22,10 @@ HERMES_HOME=/path/to/disposable/profile hermes plugins install \
   https://github.com/clayton-duarte/hermes-mtg-plugin.git --enable
 ```
 
+The public Git repository is `clayton-duarte/hermes-mtg-plugin`; the
+installed/enabled runtime plugin id (what `hermes plugins enable`/`disable`
+and `plugins.enabled` use) is `deck-lab`.
+
 See `docs/INSTALL.md` for the profile-safe verification flow, independent
 backend/desktop enable gates, and the gateway restart this requires.
 

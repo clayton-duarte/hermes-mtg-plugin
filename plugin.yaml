@@ -1,4 +1,4 @@
-name: hermes-mtg-plugin
+name: deck-lab
 display_name: Deck Lab
 version: 0.1.0
 description: "Magic: The Gathering deck repository tooling (Deck Lab) for Hermes."

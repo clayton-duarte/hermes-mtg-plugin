@@ -63,10 +63,10 @@ def loaded_manager(tmp_path, monkeypatch):
     # otherwise gated to a "not enabled in config" placeholder before the
     # loader ever imports the module.
     (hermes_home / "config.yaml").write_text(
-        "plugins:\n  enabled:\n    - hermes-mtg-plugin\n"
+        "plugins:\n  enabled:\n    - deck-lab\n"
     )
 
-    _install_plugin_copy(hermes_home / "plugins" / "hermes-mtg-plugin")
+    _install_plugin_copy(hermes_home / "plugins" / "deck-lab")
 
     # Deck Lab's own `deck_lab` package must be importable the way the real
     # plugin module resolves it (sibling of the copied __init__.py), and a
@@ -74,14 +74,14 @@ def loaded_manager(tmp_path, monkeypatch):
     neutral_cwd = tmp_path / "neutral-cwd"
     neutral_cwd.mkdir()
     monkeypatch.chdir(neutral_cwd)
-    sys.path.insert(0, str(hermes_home / "plugins" / "hermes-mtg-plugin"))
+    sys.path.insert(0, str(hermes_home / "plugins" / "deck-lab"))
 
     manager = plugins_mod.PluginManager()
     try:
         manager.discover_and_load()
         yield manager
     finally:
-        sys.path.remove(str(hermes_home / "plugins" / "hermes-mtg-plugin"))
+        sys.path.remove(str(hermes_home / "plugins" / "deck-lab"))
         sys.modules.pop("deck_lab", None)
         for mod_name in list(sys.modules):
             if mod_name.startswith("deck_lab."):
@@ -107,7 +107,7 @@ def _registered_tool_names(manager) -> set[str]:
 
 class TestRealLoaderDiscoversDeckLab:
     def test_root_entrypoint_registers_exactly_the_five_tools(self, loaded_manager):
-        loaded = loaded_manager._plugins.get("hermes-mtg-plugin")
+        loaded = loaded_manager._plugins.get("deck-lab")
         assert loaded is not None, "real loader did not discover the plugin.yaml at all"
         assert loaded.error is None, f"plugin load failed: {loaded.error}"
 
@@ -118,7 +118,7 @@ class TestRealLoaderDiscoversDeckLab:
         """A forced re-discovery (gateway reload path) must not double-register
         or error on a name collision."""
         loaded_manager.discover_and_load(force=True)
-        loaded = loaded_manager._plugins.get("hermes-mtg-plugin")
+        loaded = loaded_manager._plugins.get("deck-lab")
         assert loaded is not None and loaded.error is None
         assert _registered_tool_names(loaded_manager) == _EXPECTED_TOOL_NAMES
 
@@ -138,10 +138,10 @@ class TestMissingRootEntrypointFailsToLoad:
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         (hermes_home / "config.yaml").write_text(
-            "plugins:\n  enabled:\n    - hermes-mtg-plugin\n"
+            "plugins:\n  enabled:\n    - deck-lab\n"
         )
 
-        plugin_dir = hermes_home / "plugins" / "hermes-mtg-plugin"
+        plugin_dir = hermes_home / "plugins" / "deck-lab"
         plugin_dir.mkdir(parents=True)
         shutil.copy2(REPO_ROOT / "plugin.yaml", plugin_dir / "plugin.yaml")
         shutil.copytree(REPO_ROOT / "deck_lab", plugin_dir / "deck_lab")
@@ -154,7 +154,7 @@ class TestMissingRootEntrypointFailsToLoad:
         manager = plugins_mod.PluginManager()
         manager.discover_and_load()
 
-        loaded = manager._plugins.get("hermes-mtg-plugin")
+        loaded = manager._plugins.get("deck-lab")
         assert loaded is not None, "manifest should still be found"
         assert loaded.error is not None
         assert "__init__.py" in loaded.error
