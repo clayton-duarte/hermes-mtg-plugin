@@ -37,9 +37,9 @@ explicitly:
 
 ```
 mkdir -p "$HERMES_HOME/plugins" "$HERMES_HOME/desktop-plugins/deck-lab"
-ln -s "$(pwd)" "$HERMES_HOME/plugins/hermes-mtg-plugin"
+ln -s "$(pwd)" "$HERMES_HOME/plugins/deck-lab"
 ln -s "$(pwd)/desktop/plugin.js" "$HERMES_HOME/desktop-plugins/deck-lab/plugin.js"
-HERMES_HOME="$HERMES_HOME" hermes plugins enable hermes-mtg-plugin
+HERMES_HOME="$HERMES_HOME" hermes plugins enable deck-lab
 ```
 
 A profile can run the backend half without the desktop half (e.g. a
@@ -70,7 +70,7 @@ manifest declares them):
 HERMES_HOME="$HERMES_HOME" hermes plugins list --enabled --json
 ```
 
-The enabled inventory must contain `hermes-mtg-plugin`. Then exercise tool
+The enabled inventory must contain `deck-lab`. Then exercise tool
 registration through Hermes (or run `tests/test_plugin_loader_seam.py` from
 this checkout) and require exactly `deck_list`, `deck_get`, `deck_validate`,
 `deck_import`, and `deck_export`.
