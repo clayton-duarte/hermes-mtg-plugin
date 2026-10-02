@@ -1,45 +1,139 @@
 {
-  "head_commit_before_recording": "0cf61b7a… (Fix clickRowBackground to target trusted hit-test point on row itself)",
-  "record_command": "node scripts/record_deck_lab_demo.mjs /Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_corrected.mp4",
-  "record_exit_code": 0,
-  "output_path": "/Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_corrected.mp4",
-  "ffprobe_verified": {
-    "duration_seconds": 19.134396,
-    "width": 2440,
-    "height": 1600,
-    "nb_frames": 42,
-    "bytes": 967478
+  "card": "t_bda55c25",
+  "code_commit_used_for_capture": "a86e901c376c80a51d8521c9ebd72e8d7f3df343",
+  "code_commit_pushed": true,
+  "push_output": "0cf61b7..a86e901  (parent 437ff17 -> a86e901 via 'git push origin builder/deck-lab-pane')",
+  "evidence_commit_is_manifest_only": "this commit updates only this JSON file; no executable/UI changes occur after recording capture",
+
+  "1_stale_art_mutation": {
+    "mechanism": "ImageWithLoadingGuard reads a localStorage flag DECK_LAB_MUTATION_STALE_ART (checked via a small helper that swallows absence of window/localStorage); when '1', the guard is deliberately broken: effectiveLoadedSrc is forced to always equal the current src (image always visible) and the real onLoad handler is short-circuited to never call setLoadedSrc, so the harness-visible data-loaded-src attribute never advances past the empty string for a new image while the <img> is already shown.",
+    "red": {
+      "command": "DECK_LAB_MUTATION_STALE_ART=1 node scripts/check_deck_lab_interactions.mjs",
+      "exit_code": 1,
+      "failures_count": 1,
+      "failing_check": "no_stale_image_under_new_title",
+      "detail": {
+        "solRingSrc": "https://cards.scryfall.io/normal/front/8/e/8ee443cc-e17a-493b-9c93-1f9e141a30e4.jpg?1789644446",
+        "titleImmediatelyAfterSwitch": "Joined Researchers",
+        "imgSrcImmediatelyAfterSwitch": "https://cards.scryfall.io/normal/front/1/e/1ebaafe0-3a9a-424c-8698-d26e7be45343.jpg?1783903702",
+        "imgHiddenImmediatelyAfterSwitch": false,
+        "loadedSrcImmediatelyAfterSwitch": "",
+        "imageGenuinelyNotStale": false
+      },
+      "note": "mutation reached the live assertion (no setup error); rc=1 with exactly the named stale-art check failing on imageGenuinelyNotStale:false as required by the card"
+    },
+    "green_after_restore": {
+      "command": "node scripts/check_deck_lab_interactions.mjs",
+      "exit_code": 0,
+      "failures_count": 0,
+      "named_checks_total": 19,
+      "named_checks_passing": 19,
+      "stale_art_check_detail": {
+        "imgHiddenImmediatelyAfterSwitch": true,
+        "loadedSrcImmediatelyAfterSwitch": "",
+        "imageGenuinelyNotStale": true
+      }
+    },
+    "production_guard_unweakened": "no change to the default (mutation-inactive) code path: setLoadedSrc(src) still fires from the real onLoad when the mutation flag is absent/false, and the check's expected values were not modified -- only an opt-in localStorage-gated consumer mutation was added"
   },
-  "self_reported_by_script": {
-    "totalFrames": 42,
-    "captureWallMs": 19136,
-    "fps": 2.195,
-    "bytes": 967478
+
+  "2_trusted_row_mutation_still_red": {
+    "command": "DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK=1 node scripts/check_deck_lab_interactions.mjs",
+    "exit_code": 1,
+    "failures_count": 1,
+    "failing_check": "trusted_row_input_pins_via_card_row_onclick",
+    "detail": {
+      "rowClickCaptureAfterFirst": { "isTrusted": false, "closestGroup": "Sol Ring" },
+      "pinnedAfterRowBackgroundClick": true
+    }
   },
-  "beats_demonstrated": [
-    "Nelly fixture, two internal columns, recursive indentation/counts, long-name truncation (hold 2.2s)",
-    "pointer hover -> Sol Ring preview (hold 1.2s)",
-    "keyboard Tab focus -> Nelly Borca, Impulsive Accuser preview (hold 1.2s)",
-    "pin via dedicated pin button -> pinned (hold 0.9s)",
-    "hover Sol Ring while pinned -- preview stays on pinned card (hold 0.9s)",
-    "unpin via dedicated pin button (hold 0.9s)",
-    "Joined Researchers name click -> exact openExternal URL https://scryfall.com/card/sos/23/joined-researchers-secret-rendezvous?utm_source=api, pin unchanged (hold 1.6s)",
-    "loading placeholder (Agrus Kos, Spirit of Justice) (hold 1.0s)",
-    "error placeholder (Thought Vessel) (hold 1.0s)",
-    "DFC toggle Joined Researchers -> Secret Rendezvous, mana 1W -> 1WW, same combined-art img src retained (hold 1.3s + 0.9s)",
-    "Sol Ring art -> Joined Researchers with no stale Sol Ring image (asserted via data-loaded-src) (hold 0.7s + 1.3s)",
-    "invalid candidate diagnostics (heading + exact fixture path) held visibly (hold 1.8s)"
-  ],
-  "self_validation": "Every beat asserts its own precondition/postcondition in-page (exact row/aria-label selectors matching check_deck_lab_interactions.mjs, not textContent.includes scans) and throws + deletes the frame dir on failure before any ffmpeg encode runs.",
-  "selector_fidelity": "rowSelector/pinButtonSelector/nameButtonSelector are identical to scripts/check_deck_lab_interactions.mjs's exact [role=group][aria-label=...] + descendant-button selectors -- never a first-match button.textContent.includes() scan.",
-  "timing_fidelity": "fps for the ffmpeg encode is computed as totalFrames / (captureWallMs / 1000) -- i.e. actual frames over actual measured capture wall-clock time -- not a nominal sampling-interval fps, so the encoded MP4 duration matches real elapsed recording time (confirmed by independent ffprobe: 19.13s matches the script's self-reported captureWallMs of 19136ms).",
-  "verification_commands": [
-    "node scripts/check_deck_lab_interactions.mjs -> rc=0, 19/19 named checks pass (see run log)",
-    "DECK_LAB_MUTATION_SYNTHETIC_ROW_CLICK=1 node scripts/check_deck_lab_interactions.mjs -> rc=1, trusted_row_input_pins_via_card_row_onclick fails with isTrusted:false (pin still flips true) -- proves the check discriminates real input",
-    "DECK_LAB_LIVE_CDP=1 pytest -q tests/test_ui_interactions.py -> 1 passed in 140.17s",
-    "pytest -q tests/ -> 3 failed (pre-existing unrelated adapter/parser/scanner lane failures, same as before this card), 97 passed, 1 skipped",
-    "python3 .../no-build-plugin-ui-edits/scripts/check_plugin_js.py desktop/plugin.js -> loadable, register OK id=deck-lab",
-    "hermes plugins validate . --json -> ok:true (security scan: safe, desktop surface: stays inside plugin SDK surface)",
-    "synthetic merge: git worktree detached at 0cf61b7, git merge --no-commit --no-ff origin/main -> clean, pytest -q tests/ -> 266 passed, 1 skipped"
-  ]
+
+  "3_live_harness_green_named_check_count": {
+    "command": "node scripts/check_deck_lab_interactions.mjs",
+    "exit_code": 0,
+    "programmatically_counted_results": "len(json.load(open('deck_lab_interaction_checks.json'))) == 19, all pass:true -- counted via python3, not hardcoded"
+  },
+
+  "4_pytest_wrapper_live": {
+    "command": "DECK_LAB_LIVE_CDP=1 /private/tmp/mtgvenv/bin/python -m pytest -q tests/test_ui_interactions.py",
+    "output": "1 passed in 141.35s (0:02:21)",
+    "exit_code": 0
+  },
+
+  "5_recorder": {
+    "command": "node scripts/record_deck_lab_demo.mjs /Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_final.mp4",
+    "run_against_code_sha": "a86e901c376c80a51d8521c9ebd72e8d7f3df343",
+    "exit_code": 0,
+    "self_reported_by_script": {
+      "totalFrames": 43,
+      "captureWallMs": 20498,
+      "fps": 2.098,
+      "bytes": 983910
+    },
+    "ffprobe_independent_verification": {
+      "command": "ffprobe -v error -show_entries format=duration,size -show_entries stream=width,height,nb_frames -of json <path>",
+      "duration_seconds": 20.495710,
+      "width": 2440,
+      "height": 1600,
+      "nb_frames": 43,
+      "bytes": 983910
+    },
+    "mtime": "Oct 2 01:12 2026 (after code commit a86e901 at 01:10:10 -0400 -- recorded from committed/pushed code, not before it)",
+    "mp4_location": "/Users/claytonduarte/.hermes/profiles/builder/cache/scratch/deck_lab_demo_final.mp4 (left in builder scratch per card instructions, not committed)",
+    "new_beats_added_vs_prior_recording": [
+      "pin/unpin now via d.clickRowBackground (real trusted row-input helper), not the dedicated pin icon button",
+      "pinned-pointer-hover beat (hover Sol Ring while Nelly Borca pinned -- preview unchanged, pinned stays true)",
+      "pinned-keyboard-focus beat, DISTINCT path (keyboard-focus Thought Vessel while Nelly Borca pinned -- preview unchanged, pinned stays true) -- previously missing entirely",
+      "DFC mana asserted exactly: manaBefore === '1W' and manaAfter === '1WW' (previously only read/displayed, not asserted)",
+      "invalid diagnostics asserted exactly: heading 'This deck is invalid.', code 'CARD_QUANTITY_INVALID', message 'Quantity must be a positive integer', path 'tests/fixtures/malformed/card_quantity_invalid_zero.md' (previously only heading+path asserted)"
+    ],
+    "cleanup_semantics": "removes any existing file at outPath at start; on any assertSuccess failure or thrown error, removes the partial output file and always removes the frame dir in a finally block; CDP websocket is closed in the same finally block regardless of success/failure"
+  },
+
+  "6_focused_and_broader_tests": {
+    "full_suite": {
+      "command": "/private/tmp/mtgvenv/bin/python -m pytest -q tests/",
+      "output": "3 failed, 97 passed, 1 skipped in 0.80s",
+      "failing_tests": [
+        "tests/test_adapter_lane_contract.py::test_import_text_preserves_zone_quantity_and_name_round_trip",
+        "tests/test_parser_lane_contract.py::test_parse_board_derives_100_cards_from_nelly_golden_fixture",
+        "tests/test_scanner_lane_contract.py::test_scan_repository_discovers_nelly_deck_as_valid"
+      ],
+      "pre_existing_and_unrelated": "same 3 failures, same count (3 failed/97 passed/1 skipped) as the accepted t_e7bd48b1 baseline on commit 437ff17, before any change in this card; unrelated adapter/parser/scanner lane"
+    }
+  },
+
+  "7_plugin_validation": {
+    "check_plugin_js": {
+      "command": "python3 .../no-build-plugin-ui-edits/scripts/check_plugin_js.py desktop/plugin.js",
+      "output": "loader import regex: no bare specifiers (ok); node --check (ok); executes + register(): OK id=deck-lab"
+    },
+    "hermes_plugins_validate": {
+      "command": "hermes plugins validate . --json",
+      "output": "security scan: safe; desktop surface: stays inside the plugin SDK surface; built-in tool collisions: no tools to check"
+    }
+  },
+
+  "8_synthetic_merge_with_origin_main": {
+    "origin_main_sha": "f7c106ea18e67909101c213fd620016672100af9",
+    "command": "git clone (fresh clone of this repo), git checkout a86e901, git merge --no-commit --no-ff origin/main",
+    "merge_result": "Automatic merge went well; stopped before committing as requested (clean, no conflicts)",
+    "post_merge_pytest": {
+      "command": "/private/tmp/mtgvenv/bin/python -m pytest -q tests/",
+      "output": "266 passed, 1 skipped in 7.37s"
+    }
+  },
+
+  "9_pr_state": {
+    "command": "gh pr view 7 --json number,state,mergeable,headRefName; gh pr list --head builder/deck-lab-pane --json number,state",
+    "output": "PR #7 open on builder/deck-lab-pane, sole open PR for this branch; mergeable state UNKNOWN per GitHub's async computation at query time (not a conflict signal -- confirmed by the clean synthetic merge in item 8)"
+  },
+
+  "10_clean_untracked_audit": {
+    "git_status_before_commit": "M desktop/plugin.js, M scripts/check_deck_lab_interactions.mjs, M scripts/record_deck_lab_demo.mjs -- no untracked files",
+    "intended_file_diff_matches_card_scope": "desktop/plugin.js (stale-art mutation gate), scripts/check_deck_lab_interactions.mjs (mutation env var plumbing), scripts/record_deck_lab_demo.mjs (recorder rewrite) -- exactly the three files the card's Required changes sections 1-2 name"
+  },
+
+  "code_commit": "a86e901 on builder/deck-lab-pane, pushed to origin (0cf61b7..a86e901, parent of this evidence commit is 437ff17->a86e901)",
+  "worker_session_id": "t_bda55c25"
 }
